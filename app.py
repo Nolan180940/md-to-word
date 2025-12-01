@@ -220,7 +220,7 @@ def generate_smart_filename(text):
 
 # --- 7. 界面布局 ---
 
-st.title("🛠️ Markdown 转 Word 甲方定制版")
+st.title("🛠️ Markdown 转 Word")
 st.caption("代码块阴影 | 引用块缩进(正体) | 智能标题生成 | 自动修复公式空格")
 st.divider()
 
@@ -316,3 +316,4 @@ with col2:
                 st.error("❌ 转换失败")
                 if error_msg:
                     st.code(error_msg)
+
