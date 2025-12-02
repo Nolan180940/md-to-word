@@ -93,38 +93,30 @@ def smart_fix_markdown(text):
         fixed_text = fixed_text.replace('\\(', '$').replace('\\)', '$')
         log.append("📐 标准化行内公式")
 
-    # 7. [LaTeX] 修复行内公式多余空格 ($ x $ -> $x$)
+    # 7. [LaTeX] 修复行内公式多余空格 ($x$ -> $x$)
     pattern_space_math = r'(?<!\$)\$[ \t]+(.*?)[ \t]+\$(?!\$)'
     if re.search(pattern_space_math, fixed_text):
         fixed_text = re.sub(pattern_space_math, r'$\1$', fixed_text)
         log.append("🔧 移除了行内公式的多余空格")
 
-    # 8. [新增] 修复块级公式内部多余空行 ($$\n\n... -> $$\n...)
-    # Pandoc 有时不喜欢公式块首尾有空行
-    pattern_block_math_clean = r'(\$\$)\s*\n\s*(.*?)\s*\n\s*(\$\$)'
-    if re.search(pattern_block_math_clean, fixed_text, re.DOTALL):
-        # 使用 re.DOTALL 让 . 匹配换行符，清理首尾空白
-        # 注意：这里只做清理，不改变公式内容
-        pass # 暂不激进替换，防止破坏复杂对齐，主要依靠 Pandoc 本身的宽容度
-
-    # 9. [HTML] 清理上标
+    # 8. [HTML] 清理上标
     if '<sup>' in fixed_text:
         fixed_text = re.sub(r'<sup>(.*?)</sup>', r'^\1^', fixed_text)
         log.append("⬆️ 转换 HTML 上标")
 
-    # 10. [闭合] 自动闭合代码块/公式
+    # 9. [闭合] 自动闭合代码块/公式
     code_fence_count = len(re.findall(r'^```', fixed_text, re.MULTILINE))
     if code_fence_count % 2 != 0:
         fixed_text += "\n```"
         log.append("🧱 自动闭合代码块")
     
-    # 11. [格式] 代码块前后强制空行 (避免粘连)
+    # 10. [格式] 代码块前后强制空行 (避免粘连)
     fixed_text = re.sub(r'([^\n])\n```', r'\1\n\n```', fixed_text)
     fixed_text = re.sub(r'```\n([^\n])', r'```\n\n\1', fixed_text)
     
     return fixed_text, log
 
-# --- 4. 核心功能：Word 样式后处理 ---
+# --- 4. 核心功能：Word 样式后处理 (增强版) ---
 def apply_word_styles(docx_path):
     if not HAS_DOCX:
         return 
@@ -133,44 +125,55 @@ def apply_word_styles(docx_path):
     styles = doc.styles
 
     # === 1. 优化代码块样式 (Source Code) ===
-    try:
-        style_name = 'Source Code' if 'Source Code' in styles else 'SourceCode'
-        if style_name in styles:
-            style_code = styles[style_name]
-            style_code.font.name = 'Consolas'
-            style_code.font.size = Pt(10)
+    # 策略升级：遍历所有可能的样式名，或者创建新样式
+    target_code_styles = ['Source Code', 'SourceCode', 'Verbatim Char']
+    found_code_style = None
+    
+    for name in target_code_styles:
+        if name in styles:
+            found_code_style = styles[name]
+            # 设置样式
+            found_code_style.font.name = 'Consolas'
+            found_code_style.font.size = Pt(10)
             
-            p_pr = style_code.element.get_or_add_pPr()
+            p_pr = found_code_style.element.get_or_add_pPr()
+            
+            # 背景阴影 (Shading)
+            # 先清除旧的 shd 以防冲突
+            old_shd = p_pr.find(qn('w:shd'))
+            if old_shd is not None:
+                p_pr.remove(old_shd)
+                
             shd = OxmlElement('w:shd')
             shd.set(qn('w:val'), 'clear')
             shd.set(qn('w:color'), 'auto')
-            shd.set(qn('w:fill'), 'F2F2F2') 
+            shd.set(qn('w:fill'), 'F2F2F2') # 浅灰背景
             p_pr.append(shd)
             
-            if not p_pr.find(qn('w:pBdr')):
-                pbdr = OxmlElement('w:pBdr')
-                for border in ['top', 'left', 'bottom', 'right']:
-                    b = OxmlElement(f'w:{border}')
-                    b.set(qn('w:val'), 'single')
-                    b.set(qn('w:sz'), '4') 
-                    b.set(qn('w:space'), '1')
-                    b.set(qn('w:color'), 'D4D4D4') 
-                    pbdr.append(b)
-                p_pr.append(pbdr)
-    except Exception as e:
-        print(f"代码块样式应用失败: {e}")
+            # 边框 (Border)
+            # 先清除旧的 pBdr
+            old_pbdr = p_pr.find(qn('w:pBdr'))
+            if old_pbdr is not None:
+                p_pr.remove(old_pbdr)
+                
+            pbdr = OxmlElement('w:pBdr')
+            for border in ['top', 'left', 'bottom', 'right']:
+                b = OxmlElement(f'w:{border}')
+                b.set(qn('w:val'), 'single')
+                b.set(qn('w:sz'), '4') 
+                b.set(qn('w:space'), '1')
+                b.set(qn('w:color'), 'D4D4D4') 
+                pbdr.append(b)
+            p_pr.append(pbdr)
 
     # === 2. 优化引用块样式 (Block Text) ===
-    try:
-        target_styles = ['Block Text', 'Quote', 'BlockText']
-        found_style = None
-        for name in target_styles:
-            if name in styles:
-                found_style = styles[name]
-                break
-        
-        if found_style:
-            # 字体颜色
+    target_quote_styles = ['Block Text', 'Quote', 'BlockText']
+    
+    for name in target_quote_styles:
+        if name in styles:
+            found_style = styles[name]
+            
+            # 字体变灰
             found_style.font.color.rgb = RGBColor(105, 105, 105) 
             # 强制无斜体
             found_style.font.italic = False
@@ -179,17 +182,20 @@ def apply_word_styles(docx_path):
             
             # 左侧竖线边框
             p_pr = found_style.element.get_or_add_pPr()
-            if not p_pr.find(qn('w:pBdr')):
-                pbdr = OxmlElement('w:pBdr')
-                left = OxmlElement('w:left')
-                left.set(qn('w:val'), 'single')
-                left.set(qn('w:sz'), '12') 
-                left.set(qn('w:space'), '12') 
-                left.set(qn('w:color'), '999999') 
-                pbdr.append(left)
-                p_pr.append(pbdr)
-    except Exception as e:
-        print(f"引用样式应用失败: {e}")
+            
+            # 清除旧边框
+            old_pbdr = p_pr.find(qn('w:pBdr'))
+            if old_pbdr is not None:
+                p_pr.remove(old_pbdr)
+                
+            pbdr = OxmlElement('w:pBdr')
+            left = OxmlElement('w:left')
+            left.set(qn('w:val'), 'single')
+            left.set(qn('w:sz'), '12') 
+            left.set(qn('w:space'), '12') 
+            left.set(qn('w:color'), '999999') 
+            pbdr.append(left)
+            p_pr.append(pbdr)
 
     doc.save(docx_path)
 
@@ -200,10 +206,12 @@ def convert_to_docx(md_content):
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
             output_path = tmp_file.name
         
+        # 即使我们在 smart_fix 中修复了语法，保留扩展参数也是个双保险
+        # +tex_math_single_backslash 对于引用块中的公式非常重要
         pypandoc.convert_text(
             md_content, 
             'docx', 
-            format='markdown+tex_math_dollars', 
+            format='markdown+tex_math_dollars+tex_math_single_backslash', 
             outputfile=output_path, 
             extra_args=['--standalone']
         )
@@ -244,8 +252,8 @@ def generate_smart_filename(text):
 
 # --- 7. 界面布局 ---
 
-st.title("🛠️ Markdown 转 Word 甲方定制版")
-st.caption("代码块阴影 | 引用块缩进 | 智能修复标题/列表/引用/分割线")
+st.title("🛠️ Markdown 转 Word ")
+st.caption("代码块阴影 | 引用块缩进(正体) | 智能修复标题/列表/引用/分割线")
 st.divider()
 
 if not HAS_DOCX:
@@ -305,7 +313,7 @@ st.divider()
 col1, col2, col3 = st.columns([1, 2, 1])
 
 with col2:
-    if st.button("🚀 生成定制化 Word 文档", type="primary", use_container_width=True):
+    if st.button("🚀 生成 Word 文档", type="primary", use_container_width=True):
         if not md_text.strip():
             st.warning("⚠️ 内容不能为空")
         else:
