@@ -100,6 +100,64 @@ def smart_fix_markdown(text):
     fixed_text = re.sub(r'([^\n])\n```', r'\1\n\n```', fixed_text)
     fixed_text = re.sub(r'```\n([^\n])', r'```\n\n\1', fixed_text)
     
+    # 8. [新增] 确保引用块前后有空行
+    # 匹配以 > 开头的行（可能前面有空格），并在其前后添加空行
+    # 处理引用块前的空行
+    fixed_text = re.sub(r'([^\n>])\n[ \t]*>', r'\1\n\n>', fixed_text, flags=re.MULTILINE)
+    # 处理引用块后的空行（在非引用行前添加空行）
+    fixed_text = re.sub(r'>[^\n]*\n([^\n>])', r'>\g<0>\n\1', fixed_text, flags=re.MULTILINE)
+    # 为连续的引用行组后添加空行
+    fixed_text = re.sub(r'([>].*?)(\n(?![> \t]))', r'\1\2\n', fixed_text, flags=re.MULTILINE)
+    # 处理引用块后紧跟非引用行的情况
+    fixed_text = re.sub(r'([>][^\n]*\n)([^\n> \t])', r'\1\n\2', fixed_text, flags=re.MULTILINE)
+    
+    # 更精确的引用块处理：查找整个引用块并确保其前后有空行
+    # 首先，确保引用块之前有空行（如果前面不是空行或另一个引用）
+    fixed_text = re.sub(r'([^\n> \t])\n([ \t]*>[^\n]*(?:\n[ \t]*>[^\n]*)*)', r'\1\n\n\2', fixed_text, flags=re.MULTILINE)
+    # 然后，确保引用块之后有空行（如果后面不是空行或另一个引用）
+    # 使用更复杂的正则来匹配完整的引用块
+    original_text = fixed_text
+    # 处理引用块后的情况
+    lines = fixed_text.split('\n')
+    new_lines = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # 检查是否是引用行
+        if line.strip().startswith('>'):
+            # 收集连续的引用行
+            block_lines = []
+            j = i
+            while j < len(lines) and (lines[j].strip().startswith('>') or (lines[j].strip() == '' and j+1 < len(lines) and lines[j+1].strip().startswith('>'))):
+                block_lines.append(lines[j])
+                j += 1
+            
+            # 检查当前块前是否有内容且不是空行
+            if i > 0 and lines[i-1].strip() != '':
+                # 在块前插入空行
+                if new_lines and new_lines[-1] != '':
+                    new_lines.append('')
+            
+            # 添加引用块
+            new_lines.extend(block_lines)
+            
+            # 检查块后是否有内容且不是空行也不是另一个引用块
+            if j < len(lines) and lines[j].strip() != '' and not lines[j].strip().startswith('>'):
+                # 在块后插入空行
+                new_lines.append('')
+            
+            i = j
+        else:
+            new_lines.append(line)
+            i += 1
+    
+    fixed_text = '\n'.join(new_lines)
+    
+    # 记录引用块修复日志
+    quote_block_count = len(re.findall(r'^[ \t]*>[^\n]*', original_text, re.MULTILINE))
+    if quote_block_count > 0:
+        log.append(f"💬 处理了 {quote_block_count} 个引用块，确保其前后有空行")
+
     return fixed_text, log
 
 # --- 4. 核心功能：Word 样式后处理 ---
@@ -250,70 +308,3 @@ default_text = r'''# 深度学习中的概率分布
 ```python
 def fix_spaces(text):
     return text.strip()
-'''
-
-col_input, col_preview = st.columns(2, gap="medium")
-
-with col_input:
-    st.subheader("⌨️ 编辑区")
-    md_text = st.text_area(
-        "Input", 
-        value=default_text, 
-        height=600, 
-        label_visibility="collapsed",
-        placeholder="在此粘贴..."
-    )
-
-with col_preview:
-    st.subheader("👁️ 实时预览 (修复后)")
-    
-    preview_text, logs = smart_fix_markdown(md_text)
-
-    if logs:
-        with st.expander(f"🤖 自动执行了 {len(logs)} 项智能修复", expanded=True):
-            for log in logs:
-                st.markdown(f"- {log}")
-
-    with st.container(border=True):
-        if preview_text.strip():
-            st.markdown(preview_text, unsafe_allow_html=True)
-        else:
-            st.write("等待输入...")
-
-# --- 底部 ---
-st.divider()
-col1, col2, col3 = st.columns([1, 2, 1])
-
-with col2:
-    if st.button("🚀 生成定制化 Word 文档", type="primary", use_container_width=True):
-        if not md_text.strip():
-            st.warning("⚠️ 内容不能为空")
-        else:
-            final_text, _ = smart_fix_markdown(md_text)
-            file_name = generate_smart_filename(final_text)
-
-            with st.spinner("正在渲染并注入样式..."):
-                docx_path, error_msg = convert_to_docx(final_text)
-                
-            if docx_path and os.path.exists(docx_path):
-                with open(docx_path, "rb") as f:
-                    file_data = f.read()
-                
-                st.success(f"✅ 生成成功！文件名为：**{file_name}**")
-                
-                st.download_button(
-                    label="⬇️ 点击下载 Word",
-                    data=file_data,
-                    file_name=file_name,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True
-                )
-                try:
-                    os.remove(docx_path)
-                except:
-                    pass
-            else:
-                st.error("❌ 转换失败")
-                if error_msg:
-                    st.code(error_msg)
-
