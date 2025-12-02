@@ -41,7 +41,7 @@ st.markdown("""
         .fix-report { background-color: #064e3b; border-color: #065f46; color: #ecfccb; }
     }
 </style>
-""", unsafe_allow_html=True)
+""", unsafe_allow_html=True,)
 
 # --- 3. 核心功能：智能修复引擎 (V5.1 增强版) ---
 def smart_fix_markdown(text):
@@ -64,12 +64,7 @@ def smart_fix_markdown(text):
         fixed_text = fixed_text.replace('\\(', '$').replace('\\)', '$')
         log.append("📐 将 LaTeX 行内公式 \\(...\\) 标准化为 $...$")
 
-    # 3. [新增] 修复行内公式多余空格 $x$ -> $x$
-    # Pandoc 对 inline math 要求 $ 后紧跟内容，$ 前紧跟内容
-    # 正则说明：(?<!\$) 排除 $$ 的情况
-    # \$[ \t]+ 匹配起始 $ 后的空格
-    # (.*?) 捕获内容
-    # [ \t]+\$ 匹配结束 $ 前的空格
+    # 3. [新增] 修复行内公式多余空格
     pattern_space_math = r'(?<!\$)\$[ \t]+(.*?)[ \t]+\$(?!\$)'
     if re.search(pattern_space_math, fixed_text):
         new_text, count = re.subn(pattern_space_math, r'$\1$', fixed_text)
@@ -95,109 +90,69 @@ def smart_fix_markdown(text):
     if math_block_count % 2 != 0:
         fixed_text += "\n$$"
         log.append("🧮 自动闭合了未结束的 LaTeX 公式块")
-        
+
     # 7. [格式优化] 确保代码块前后有空行
     fixed_text = re.sub(r'([^\n])\n```', r'\1\n\n```', fixed_text)
     fixed_text = re.sub(r'```\n([^\n])', r'```\n\n\1', fixed_text)
-    
-    # 8. [新增] 确保引用块前后有空行
-    # 匹配以 > 开头的行（可能前面有空格），并在其前后添加空行
-    # 处理引用块前的空行
-    fixed_text = re.sub(r'([^\n>])\n[ \t]*>', r'\1\n\n>', fixed_text, flags=re.MULTILINE)
-    # 处理引用块后的空行（在非引用行前添加空行）
-    fixed_text = re.sub(r'>[^\n]*\n([^\n>])', r'>\g<0>\n\1', fixed_text, flags=re.MULTILINE)
-    # 为连续的引用行组后添加空行
-    fixed_text = re.sub(r'([>].*?)(\n(?![> \t]))', r'\1\2\n', fixed_text, flags=re.MULTILINE)
-    # 处理引用块后紧跟非引用行的情况
-    fixed_text = re.sub(r'([>][^\n]*\n)([^\n> \t])', r'\1\n\2', fixed_text, flags=re.MULTILINE)
-    
-    # 更精确的引用块处理：查找整个引用块并确保其前后有空行
-    # 首先，确保引用块之前有空行（如果前面不是空行或另一个引用）
-    fixed_text = re.sub(r'([^\n> \t])\n([ \t]*>[^\n]*(?:\n[ \t]*>[^\n]*)*)', r'\1\n\n\2', fixed_text, flags=re.MULTILINE)
-    # 然后，确保引用块之后有空行（如果后面不是空行或另一个引用）
-    # 使用更复杂的正则来匹配完整的引用块
-    original_text = fixed_text
-    # 处理引用块后的情况
-    lines = fixed_text.split('\n')
-    new_lines = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        # 检查是否是引用行
-        if line.strip().startswith('>'):
-            # 收集连续的引用行
-            block_lines = []
-            j = i
-            while j < len(lines) and (lines[j].strip().startswith('>') or (lines[j].strip() == '' and j+1 < len(lines) and lines[j+1].strip().startswith('>'))):
-                block_lines.append(lines[j])
-                j += 1
-            
-            # 检查当前块前是否有内容且不是空行
-            if i > 0 and lines[i-1].strip() != '':
-                # 在块前插入空行
-                if new_lines and new_lines[-1] != '':
-                    new_lines.append('')
-            
-            # 添加引用块
-            new_lines.extend(block_lines)
-            
-            # 检查块后是否有内容且不是空行也不是另一个引用块
-            if j < len(lines) and lines[j].strip() != '' and not lines[j].strip().startswith('>'):
-                # 在块后插入空行
-                new_lines.append('')
-            
-            i = j
-        else:
-            new_lines.append(line)
-            i += 1
-    
-    fixed_text = '\n'.join(new_lines)
-    
-    # 记录引用块修复日志
-    quote_block_count = len(re.findall(r'^[ \t]*>[^\n]*', original_text, re.MULTILINE))
-    if quote_block_count > 0:
-        log.append(f"💬 处理了 {quote_block_count} 个引用块，确保其前后有空行")
+
+    # 8. [关键新增] 确保 blockquote 段落前后有空行
+    blockquote_pattern = r'(?:^>.*(?:\n|$))+'
+    matches = re.finditer(blockquote_pattern, fixed_text, re.MULTILINE)
+
+    offset = 0
+    for m in matches:
+        start, end = m.start() + offset, m.end() + offset
+
+        before = fixed_text[:start]
+        after = fixed_text[end:]
+
+        if not before.endswith('\n\n'):
+            before = before.rstrip('\n') + '\n\n'
+            log.append("🧩 在 blockquote 前加入空行")
+
+        if after and not after.startswith('\n\n'):
+            after = '\n\n' + after.lstrip('\n')
+            log.append("🧩 在 blockquote 后加入空行")
+
+        fixed_text = before + fixed_text[start:end] + after
+
+        offset = len(fixed_text) - len(before) - len(fixed_text[start:end]) - len(after)
 
     return fixed_text, log
 
 # --- 4. 核心功能：Word 样式后处理 ---
 def apply_word_styles(docx_path):
     if not HAS_DOCX:
-        return 
-        
+        return
+
     doc = Document(docx_path)
     styles = doc.styles
 
-    # === 1. 优化代码块样式 (Source Code) ===
     try:
         style_name = 'Source Code' if 'Source Code' in styles else 'SourceCode'
         if style_name in styles:
             style_code = styles[style_name]
             style_code.font.name = 'Consolas'
             style_code.font.size = Pt(10)
-            
+
             p_pr = style_code.element.get_or_add_pPr()
             shd = OxmlElement('w:shd')
-            shd.set(qn('w:val'), 'clear')
-            shd.set(qn('w:color'), 'auto')
-            shd.set(qn('w:fill'), 'F2F2F2') 
+            shd.set(qn('w:fill'), 'F2F2F2')
             p_pr.append(shd)
-            
+
             if not p_pr.find(qn('w:pBdr')):
                 pbdr = OxmlElement('w:pBdr')
                 for border in ['top', 'left', 'bottom', 'right']:
                     b = OxmlElement(f'w:{border}')
                     b.set(qn('w:val'), 'single')
-                    b.set(qn('w:sz'), '4') 
-                    b.set(qn('w:space'), '1')
-                    b.set(qn('w:color'), 'D4D4D4') 
+                    b.set(qn('w:sz'), '4')
+                    b.set(qn('w:color'), 'D4D4D4')
                     pbdr.append(b)
                 p_pr.append(pbdr)
-            
+
     except Exception as e:
         print(f"代码块样式应用失败: {e}")
 
-    # === 2. 优化引用块样式 (Block Text) ===
     try:
         target_styles = ['Block Text', 'Quote', 'BlockText']
         found_style = None
@@ -205,20 +160,19 @@ def apply_word_styles(docx_path):
             if name in styles:
                 found_style = styles[name]
                 break
-        
+
         if found_style:
-            found_style.font.color.rgb = RGBColor(105, 105, 105) 
+            found_style.font.color.rgb = RGBColor(105, 105, 105)
             found_style.font.italic = False
             found_style.paragraph_format.left_indent = Inches(0.25)
-            
+
             p_pr = found_style.element.get_or_add_pPr()
             if not p_pr.find(qn('w:pBdr')):
                 pbdr = OxmlElement('w:pBdr')
                 left = OxmlElement('w:left')
                 left.set(qn('w:val'), 'single')
-                left.set(qn('w:sz'), '12') 
-                left.set(qn('w:space'), '12') 
-                left.set(qn('w:color'), '999999') 
+                left.set(qn('w:sz'), '12')
+                left.set(qn('w:color'), '999999')
                 pbdr.append(left)
                 p_pr.append(pbdr)
 
@@ -233,18 +187,18 @@ def convert_to_docx(md_content):
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
             output_path = tmp_file.name
-        
+
         pypandoc.convert_text(
-            md_content, 
-            'docx', 
-            format='markdown+tex_math_dollars', 
-            outputfile=output_path, 
+            md_content,
+            'docx',
+            format='markdown+tex_math_dollars',
+            outputfile=output_path,
             extra_args=['--standalone']
         )
-        
+
         if HAS_DOCX:
             apply_word_styles(output_path)
-            
+
         return output_path, None
     except Exception as e:
         if output_path and os.path.exists(output_path):
@@ -258,26 +212,19 @@ def convert_to_docx(md_content):
 def generate_smart_filename(text):
     if not text or not text.strip():
         return "document.docx"
-    
+
     h1_match = re.search(r'^#\s+(.+)$', text, re.MULTILINE)
-    if h1_match:
-        raw_title = h1_match.group(1).strip()
-    else:
-        h2_match = re.search(r'^##\s+(.+)$', text, re.MULTILINE)
-        if h2_match:
-            raw_title = h2_match.group(1).strip()
-        else:
-            lines = [l.strip() for l in text.split('\n') if l.strip()]
-            raw_title = lines[0] if lines else "document"
+    raw_title = h1_match.group(1).strip() if h1_match else \
+        (raw_title := (re.search(r'^##\s+(.+)$', text, re.MULTILINE) or 
+                      (lines := [l.strip() for l in text.split('\n') if l.strip()]) and lines[0] or "document"))
 
     clean_name = re.sub(r'[\\/*?:"<>|]', '', raw_title)
     clean_name = re.sub(r'[*_`]', '', clean_name)
     final_name = clean_name[:40].strip()
-    
+
     return f"{final_name}.docx"
 
 # --- 7. 界面布局 ---
-
 st.title("🛠️ Markdown 转 Word")
 st.caption("代码块阴影 | 引用块缩进(正体) | 智能标题生成 | 自动修复公式空格")
 st.divider()
@@ -285,26 +232,78 @@ st.divider()
 if not HAS_DOCX:
     st.error("⚠️ 检测到未安装 `python-docx` 库。样式增强功能将无法生效。")
 
-# 默认示例文本
 default_text = r'''# 深度学习中的概率分布
 
 这是一个包含 "空格公式" 的测试。
 
 ## 1. 坏掉的公式 (Spaces)
 
-大模型经常输出这种带空格的行内公式： $E = mc^2$ ，或者 $ x_0 = 0 $。
-在 Pandoc 里，这通常会被解析成普通文本。
+> 这是引用示例  
+> 连续的引用需要整体前后换行
 
-本工具会自动将其修复为：$E=mc^2$ 和 $x_0=0$。
+大模型经常输出这种带空格的行内公式： $ x_0 = 0 $。  
+本工具会自动将其修复为：$x_0=0$。
+'''
 
-## 2. 块级公式 (LaTeX 风格)
+col_input, col_preview = st.columns(2, gap="medium")
 
-\[
-\mathcal{L}(\theta) = -\frac{1}{N} \sum_{i=1}^N \left[ y_i \log(\hat{y}_i) + (1-y_i) \log(1-\hat{y}_i) \right]
-\]
+with col_input:
+    st.subheader("⌨️ 编辑区")
+    md_text = st.text_area(
+        "Input",
+        value=default_text,
+        height=600,
+        label_visibility="collapsed",
+        placeholder="在此粘贴..."
+    )
 
-## 3. 代码块测试
+with col_preview:
+    st.subheader("👁️ 实时预览 (修复后)")
+    preview_text, logs = smart_fix_markdown(md_text)
 
-```python
-def fix_spaces(text):
-    return text.strip()
+    if logs:
+        with st.expander(f"🤖 自动执行了 {len(logs)} 项智能修复", expanded=True):
+            for log_item in logs:
+                st.markdown(f"- {log_item}")
+
+    with st.container(border=True):
+        if preview_text.strip():
+            st.markdown(preview_text, unsafe_allow_html=True)
+        else:
+            st.write("等待输入...")
+
+st.divider()
+col1, col2, col3 = st.columns([1, 2, 1])
+
+with col2:
+    if st.button("🚀 生成定制化 Word 文档", type="primary", use_container_width=True):
+        if not md_text.strip():
+            st.warning("⚠️ 内容不能为空")
+        else:
+            final_text, fix_log = smart_fix_markdown(md_text)
+            doc_name = generate_smart_filename(final_text)
+
+            with st.spinner("正在渲染并注入样式..."):
+                docx_path, error_msg = convert_to_docx(final_text)
+
+            if docx_path and os.path.exists(docx_path):
+                with open(docx_path, "rb") as f:
+                    file_bytes = f.read()
+
+                st.success(f"✅ 生成成功！文件名为：**{doc_name}**")
+
+                st.download_button(
+                    label="⬇️ 下载 Word 文档",
+                    data=file_bytes,
+                    file_name=doc_name,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
+                try: 
+                    os.remove(docx_path)
+                except: 
+                    pass
+            else:
+                st.error("❌ 转换失败")
+                if error_msg:
+                    st.code(error_msg)
