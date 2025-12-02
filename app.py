@@ -14,7 +14,7 @@ try:
 except ImportError:
     HAS_DOCX = False
 
-# --- 页面配置 ---
+# --- 1. 页面配置 ---
 st.set_page_config(
     page_title="Markdown to Word Pro (智能修复版)",
     page_icon="🎨",
@@ -22,6 +22,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# --- 2. CSS 美化 ---
 st.markdown("""
 <style>
     h1, h2, h3 { font-family: 'Segoe UI', sans-serif; font-weight: 600; }
@@ -42,113 +43,121 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# =============================
-# smart_fix_markdown（改进版）
-# - 更保守地处理行内/块级公式
-# - 将 \[...\] 转为 $$\n...\n$$ 并保留换行
-# - 只在必要情况下修复行内公式的多余空格（不跨行）
-# - 确保连续以 '>' 开头的 blockquote 段落在前后各有空行（不改变 '>'）
-# - 自动闭合未配对的 ``` 和 $$（对 $$ 以双 $ 为单位）
-# =============================
+# --- 3. 核心功能：智能修复引擎 (V5.1 增强版) ---
 def smart_fix_markdown(text):
+    """
+    注意：此函数只在原有逻辑上增加了
+    — 对 blockquote(以 '>' 开头的连续行块) 的严格处理：
+      * 在整个 blockquote 块之前确保有至少 1 个空行
+      * 在整个 blockquote 块之后确保有至少 1 个空行
+    不会对 blockquote 行本身做任何修改（不会删除或添加 '>'），也不会对其它结构进行不必要改动。
+    """
     log = []
     fixed_text = text if text is not None else ""
 
-    # 1) 清理零宽空格（不可见字符）
+    # 1. [基础] 清理零宽空格
     if '\u200b' in fixed_text:
         fixed_text = fixed_text.replace('\u200b', '')
         log.append("🧹 移除了隐形字符")
 
-    # 2) 将 \[ ... \]（LaTeX 块）转为 $$\n ... \n$$ （保留内部换行）
-    # 使用 DOTALL 捕获跨行内容
-    def repl_bracket_block(m):
-        inner = m.group(1).rstrip('\n')
-        return "$$\n" + inner + "\n$$"
-    new_text, cnt = re.subn(r'\\\[(.*?)\\\]', repl_bracket_block, fixed_text, flags=re.DOTALL)
-    if cnt > 0:
-        fixed_text = new_text
-        log.append(f"📐 将 {cnt} 处 LaTeX 块 \\[...\\] 标准化为 $$...$$（并保留换行）")
+    # 2. [关键] 强制标准化 LaTeX 公式语法
+    # 处理块级公式 \[ ... \] -> $$...$$
+    if '\\[' in fixed_text or '\\]' in fixed_text:
+        fixed_text = fixed_text.replace('\\[', '$$').replace('\\]', '$$')
+        log.append("📐 将 LaTeX 块级公式 \\[...\\] 标准化为 $$...$$")
 
-    # 3) 将 \( ... \)（短 inline LaTeX）转为 $...$ —— 但只在不跨行时替换
-    new_text, cnt = re.subn(r'\\\(([^\n]*?)\\\)', r'$\1$', fixed_text)
-    if cnt > 0:
-        fixed_text = new_text
-        log.append(f"📐 将 {cnt} 处 LaTeX 行内公式 \\(...\\) 标准化为 $...$")
+    # 处理行内公式 \( ... \) -> $...$
+    if '\\(' in fixed_text or '\\)' in fixed_text:
+        fixed_text = fixed_text.replace('\\(', '$').replace('\\)', '$')
+        log.append("📐 将 LaTeX 行内公式 \\(...\\) 标准化为 $...$")
 
-    # 4) 修复行内公式两端多余空格，但严格不跨行（避免把跨行文本吞掉）
-    pattern_space_math = r'(?<!\$)\$[ \t]+([^\n]*?)[ \t]+\$(?!\$)'
-    new_text, cnt = re.subn(pattern_space_math, r'$\1$', fixed_text)
-    if cnt > 0:
-        fixed_text = new_text
-        log.append(f"🔧 移除了 {cnt} 处行内公式的多余空格（仅单行匹配）")
+    # 3. [新增] 修复行内公式多余空格 $x$ -> $x$
+    pattern_space_math = r'(?<!\$)\$[ \t]+(.*?)[ \t]+\$(?!\$)'
+    if re.search(pattern_space_math, fixed_text):
+        new_text, count = re.subn(pattern_space_math, r'$\1$', fixed_text)
+        if count > 0:
+            fixed_text = new_text
+            log.append(f"🔧 移除了 {count} 处行内公式的多余空格 ($x$ -> $x$)")
 
-    # 5) HTML 上标 <sup>...</sup> -> ^...^ （宽松替换）
-    new_text, cnt = re.subn(r'<sup>(.*?)</sup>', r'^\1^', fixed_text, flags=re.DOTALL)
-    if cnt > 0:
-        fixed_text = new_text
-        log.append(f"⬆️ 将 {cnt} 处 HTML 上标转换为 Markdown 上标格式")
+    # 4. [HTML 清理] 将 <sup>...</sup> 转换为 Pandoc 上标 ^...^
+    if '<sup>' in fixed_text:
+        new_text, count = re.subn(r'<sup>(.*?)</sup>', r'^\1^', fixed_text)
+        if count > 0:
+            fixed_text = new_text
+            log.append(f"⬆️ 将 {count} 处 HTML 上标标签转换为 Markdown 格式")
 
-    # 6) 确保代码块 ``` 的数量为偶数（若为奇数则在文本末尾补一个 ```）
+    # 5. [闭合检查] 自动闭合代码块
     code_fence_count = len(re.findall(r'^```', fixed_text, re.MULTILINE))
     if code_fence_count % 2 != 0:
-        fixed_text = fixed_text.rstrip('\n') + "\n\n```\n"
-        log.append("🧱 自动闭合了未结束的代码块（在文末补 ```）")
+        fixed_text += "\n```"
+        log.append("🧱 自动闭合了未结束的代码块")
 
-    # 7) 针对 $$ 的块公式配对（只统计完整的 $$ 符号对）
-    #    先查找所有 $$ 的位置，若为奇数则在文末补一个 $$（不会尝试修复单个 $）
-    dollar_pairs = re.findall(r'\$\$', fixed_text)
-    if len(dollar_pairs) % 2 != 0:
-        fixed_text = fixed_text.rstrip('\n') + "\n\n$$\n"
-        log.append("🧮 自动闭合了未结束的 $$ 块公式（在文末补 $$）")
+    # 6. [闭合检查] 自动闭合公式块
+    math_block_count = fixed_text.count('$$')
+    if math_block_count % 2 != 0:
+        fixed_text += "\n$$"
+        log.append("🧮 自动闭合了未结束的 LaTeX 公式块")
 
-    # 8) 确保代码块前后有空行（增强 Pandoc 识别）
+    # 7. [格式优化] 确保代码块前后有空行
     fixed_text = re.sub(r'([^\n])\n```', r'\1\n\n```', fixed_text)
     fixed_text = re.sub(r'```\n([^\n])', r'```\n\n\1', fixed_text)
 
-    # 9) 最保守的 blockquote 处理：按行扫描，合并连续 '>' 行为一个 block，
-    #    在 block 前后各插入一个空行（如果本来就有空行则不重复插入）。
+    # ---------------------------
+    # 8. [保守新增] 对 blockquote（以 '>' 开头的连续行）进行段级分隔：
+    #    - 将连续以 '>' 开头的行视为一个 blockquote 块（保留每行的 '>'）
+    #    - 在该块之前确保至少有一个空行；在该块之后确保至少有一个空行
+    #    - 不改变块内行内容，不添加或删除 '>' 符号
+    #    该处理使用行级方式实现，避免误匹配其它结构。
+    # ---------------------------
+
+    # 先按行分割（保留原有行顺序）
     lines = fixed_text.splitlines()
-    if lines:
-        out = []
-        i = 0
-        made_change = False
-        while i < len(lines):
-            line = lines[i]
-            if line.lstrip().startswith('>'):
-                # 前置空行
-                if out and out[-1].strip() != '':
-                    out.append('')
-                    made_change = True
+    if len(lines) == 0:
+        return fixed_text, log
 
-                # 把连续的 > 行直接复制到 out
-                while i < len(lines) and lines[i].lstrip().startswith('>'):
-                    out.append(lines[i])
-                    i += 1
+    out_lines = []
+    i = 0
+    made_change = False
 
-                # 后置空行（仅当后面还有非空内容时）
-                if i < len(lines) and lines[i].strip() != '':
-                    out.append('')
-                    made_change = True
-                continue
-            else:
-                out.append(line)
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.lstrip()
+        if stripped.startswith('>'):
+            # blockquote 起始。确保前方有空行（如果 out_lines 非空且末行不是空行）
+            if out_lines and out_lines[-1].strip() != '':
+                out_lines.append('')  # 插入一个空行
+                made_change = True
+
+            # 将连续的 blockquote 行整体写入 out_lines（不修改行内容）
+            while i < len(lines) and lines[i].lstrip().startswith('>'):
+                out_lines.append(lines[i])
                 i += 1
 
-        # 恢复末尾换行状态
-        if fixed_text.endswith('\n'):
-            new_fixed_text = '\n'.join(out) + '\n'
+            # 确保 blockquote 之后有空行（如果后续还有行，并且后续行不是空行）
+            if i < len(lines) and lines[i].strip() != '':
+                out_lines.append('')
+                made_change = True
+
+            # 继续循环（注意此处不要 i += 1，因为内部 while 已推进）
+            continue
         else:
-            new_fixed_text = '\n'.join(out)
+            # 普通行，直接追加
+            out_lines.append(line)
+            i += 1
 
-        if made_change:
-            fixed_text = new_fixed_text
-            log.append("🧩 在 blockquote 段落的前后强制加入空行（仅插入必要的空行）")
+    # 重新拼接并保留文本末尾是否有换行（如果原文以换行结尾，保留）
+    ends_with_newline = fixed_text.endswith('\n')
+    new_fixed = '\n'.join(out_lines)
+    if ends_with_newline:
+        new_fixed = new_fixed + '\n'
 
-    # 返回修复后的文本与日志
+    if made_change:
+        fixed_text = new_fixed
+        log.append("🧩 已在所有 blockquote 段落的前后强制加入空行（便于 Pandoc 解析）")
+
     return fixed_text, log
 
-# ========== 以下为原有代码（未变） ==========
-
+# --- 4. 核心功能：Word 样式后处理 ---
 def apply_word_styles(docx_path):
     if not HAS_DOCX:
         return 
@@ -215,6 +224,7 @@ def apply_word_styles(docx_path):
 
     doc.save(docx_path)
 
+# --- 5. 转换与生成 ---
 def convert_to_docx(md_content):
     output_path = None
     try:
@@ -241,6 +251,7 @@ def convert_to_docx(md_content):
                 pass
         return None, str(e)
 
+# --- 6. 智能文件名生成 ---
 def generate_smart_filename(text):
     if not text or not text.strip():
         return "document.docx"
@@ -262,7 +273,8 @@ def generate_smart_filename(text):
     
     return f"{final_name}.docx"
 
-# ========== UI 布局（不变） ==========
+# --- 7. 界面布局 ---
+
 st.title("🛠️ Markdown 转 Word")
 st.caption("代码块阴影 | 引用块缩进(正体) | 智能标题生成 | 自动修复公式空格")
 st.divider()
@@ -270,6 +282,7 @@ st.divider()
 if not HAS_DOCX:
     st.error("⚠️ 检测到未安装 `python-docx` 库。样式增强功能将无法生效。")
 
+# 默认示例文本
 default_text = r'''# 深度学习中的概率分布
 
 这是一个包含 "空格公式" 的测试。
@@ -308,6 +321,7 @@ with col_input:
 
 with col_preview:
     st.subheader("👁️ 实时预览 (修复后)")
+    
     preview_text, logs = smart_fix_markdown(md_text)
 
     if logs:
@@ -321,6 +335,7 @@ with col_preview:
         else:
             st.write("等待输入...")
 
+# --- 底部 ---
 st.divider()
 col1, col2, col3 = st.columns([1, 2, 1])
 
