@@ -43,7 +43,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 核心功能：智能修复引擎 (V6.3 针对性增强版) ---
+# --- 3. 核心功能：智能修复引擎 (V6.4 强力空行版) ---
 def smart_fix_markdown(text):
     log = []
     fixed_text = text
@@ -53,27 +53,38 @@ def smart_fix_markdown(text):
         fixed_text = fixed_text.replace('\u200b', '')
         log.append("🧹 移除了隐形字符")
 
-    # 2. [关键] 强制修复标题语法
+    # 2. [关键] 强制修复标题语法 (#Title / #   Title -> # Title)
+    # 逻辑：查找行首的 #，无论后面有没有空格，或者有多少空格，统一规范化为 "# "
+    # 同时确保标题前面有空行 (除非是文件第一行)
+    
     # 2.1 修复缺少空格 (#Title -> # Title)
     pattern_heading_missing = r'^(#{1,6})([^ \t\n#])'
     if re.search(pattern_heading_missing, fixed_text, re.MULTILINE):
         fixed_text = re.sub(pattern_heading_missing, r'\1 \2', fixed_text, flags=re.MULTILINE)
         log.append("🔨 修复了标题缺少空格的问题")
     
-    # 2.2 修复多余空格 (#   Title -> # Title) - 这是一个常见的不规范格式
+    # 2.2 修复多余空格 (#   Title -> # Title)
     pattern_heading_extra = r'^(#{1,6})[ \t]{2,}'
     if re.search(pattern_heading_extra, fixed_text, re.MULTILINE):
         fixed_text = re.sub(pattern_heading_extra, r'\1 ', fixed_text, flags=re.MULTILINE)
         log.append("🔨 标准化了标题空格")
 
+    # 2.3 [新增] 强制标题前加空行 (防止粘连上一段)
+    # 查找：非换行符 + 换行 + #号
+    fixed_text = re.sub(r'([^\n])\n(#{1,6}[ \t])', r'\1\n\n\2', fixed_text)
+
     # 3. [关键] 强制修复引用语法 (>Text -> > Text)
-    # 3.1 修复 > 后面缺少空格的情况
+    # 3.1 修复缺少空格
     pattern_quote = r'^(>+)([^ \t\n])'
     if re.search(pattern_quote, fixed_text, re.MULTILINE):
         fixed_text = re.sub(pattern_quote, r'\1 \2', fixed_text, flags=re.MULTILINE)
         log.append("🔨 修复了引用缺少空格的问题")
 
-    # 4. [新增] 修复列表语法
+    # 3.2 [新增] 强制引用块前加空行
+    # 查找：非换行符 + 换行 + >号
+    fixed_text = re.sub(r'([^\n])\n(>+[ \t])', r'\1\n\n\2', fixed_text)
+
+    # 4. [列表] 修复列表语法 (-Item -> - Item)
     pattern_ul = r'^(\s*[-*+])([^ \t\n])'
     if re.search(pattern_ul, fixed_text, re.MULTILINE):
         fixed_text = re.sub(pattern_ul, r'\1 \2', fixed_text, flags=re.MULTILINE)
@@ -85,8 +96,7 @@ def smart_fix_markdown(text):
         log.append("🔢 修复了粘连的有序列表语法")
 
     # 5. [关键] 强制修复分割线 (---)
-    # 强制在分割线前后各加两个换行符，防止它被识别为标题下划线
-    # 匹配行首开始的 3个以上 - * 或 _，允许行首有空格
+    # 强制在分割线前后各加两个换行符
     pattern_hr = r'^\s*([-*_]){3,}\s*$'
     if re.search(pattern_hr, fixed_text, re.MULTILINE):
         fixed_text = re.sub(pattern_hr, r'\n\n---\n\n', fixed_text, flags=re.MULTILINE)
@@ -121,12 +131,12 @@ def smart_fix_markdown(text):
     fixed_text = re.sub(r'([^\n])\n```', r'\1\n\n```', fixed_text)
     fixed_text = re.sub(r'```\n([^\n])', r'```\n\n\1', fixed_text)
     
-    # 11. [大扫除] 清理因重复修复产生的过多空行 (超过3个换行变2个)
+    # 11. [大扫除] 清理过多空行
     fixed_text = re.sub(r'\n{4,}', r'\n\n', fixed_text)
     
     return fixed_text, log
 
-# --- 4. 核心功能：Word 样式后处理 (增强稳定性版 - 未修改) ---
+# --- 4. 核心功能：Word 样式后处理 (保持原样) ---
 def apply_word_styles(docx_path):
     if not HAS_DOCX:
         return
@@ -147,7 +157,6 @@ def apply_word_styles(docx_path):
                     
                     p_pr = found_code_style.element.get_or_add_pPr()
                     
-                    # 只有当没有背景时才添加，避免重复叠加导致的错误
                     if not p_pr.find(qn('w:shd')):
                         shd = OxmlElement('w:shd')
                         shd.set(qn('w:val'), 'clear')
@@ -166,7 +175,7 @@ def apply_word_styles(docx_path):
                             pbdr.append(b)
                         p_pr.append(pbdr)
                 except Exception:
-                    continue # 单个样式失败不影响其他
+                    continue 
 
         # === 2. 优化引用块样式 ===
         target_quote_styles = ['Block Text', 'Quote', 'BlockText']
@@ -196,9 +205,8 @@ def apply_word_styles(docx_path):
         doc.save(docx_path)
     except Exception as e:
         print(f"样式应用失败 (非致命错误): {e}")
-        # 这里不抛出异常，保证 convert_to_docx 能返回文件
 
-# --- 5. 转换与生成 (带安全气囊 - 未修改) ---
+# --- 5. 转换与生成 (保持原样) ---
 def convert_to_docx(md_content):
     output_path = None
     try:
@@ -215,7 +223,7 @@ def convert_to_docx(md_content):
             extra_args=['--standalone']
         )
         
-        # 2. 样式增强 (如果这步挂了，我们 catch 住，至少返回原版 docx)
+        # 2. 样式增强
         if HAS_DOCX:
             try:
                 apply_word_styles(output_path)
@@ -224,7 +232,6 @@ def convert_to_docx(md_content):
             
         return output_path, None
     except Exception as e:
-        # 只有当连文件都生成不了时，才报错
         if output_path and os.path.exists(output_path):
             try:
                 os.remove(output_path)
