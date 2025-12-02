@@ -4,7 +4,7 @@ import tempfile
 import os
 import re
 
-# 尝试导入 python-docx
+# 尝试导入 python-docx，用于后期处理 Word 样式
 try:
     from docx import Document
     from docx.shared import Pt, RGBColor, Inches
@@ -16,8 +16,8 @@ except ImportError:
 
 # --- 1. 页面配置 ---
 st.set_page_config(
-    page_title="Markdown to Word Pro (稳定版)",
-    page_icon="🛡️",
+    page_title="Markdown to Word Pro (智能修复版)",
+    page_icon="🎨",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -43,215 +43,149 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 核心功能：智能修复引擎 (V6.5 逐行扫描增强版) ---
+# --- 3. 核心功能：智能修复引擎 (V5.1 增强版) ---
 def smart_fix_markdown(text):
-    if not text: return text, []
-    
     log = []
-    
-    # 1. 全局预处理：清理零宽空格等隐形字符
-    if '\u200b' in text:
-        text = text.replace('\u200b', '')
+    fixed_text = text
+
+    # 1. [基础] 清理零宽空格
+    if '\u200b' in fixed_text:
+        fixed_text = fixed_text.replace('\u200b', '')
         log.append("🧹 移除了隐形字符")
 
-    # 2. 全局预处理：修复 LaTeX 公式语法 (\[..\] -> $$..$$)
-    if '\\[' in text or '\\]' in text:
-        text = text.replace('\\[', '$$').replace('\\]', '$$')
-        log.append("📐 标准化块级公式")
-    if '\\(' in text or '\\)' in text:
-        text = text.replace('\\(', '$').replace('\\)', '$')
-        log.append("📐 标准化行内公式")
+    # 2. [关键] 强制标准化 LaTeX 公式语法
+    # 处理块级公式 \[ ... \] -> $$...$$
+    if '\\[' in fixed_text or '\\]' in fixed_text:
+        fixed_text = fixed_text.replace('\\[', '$$').replace('\\]', '$$')
+        log.append("📐 将 LaTeX 块级公式 \\[...\\] 标准化为 $$...$$")
 
-    # 3. 逐行处理 (上下文感知)
-    lines = text.split('\n')
-    new_lines = []
-    
-    # 正则预编译
-    re_heading = re.compile(r'^(#{1,6})([^ #])') # 标题缺空格 #Title
-    re_heading_std = re.compile(r'^(#{1,6}) (.*)') # 标准标题
-    re_quote = re.compile(r'^(>+)([^ \n])')      # 引用缺空格 >Text
-    re_quote_std = re.compile(r'^(>+)( .*)?')    # 标准引用
-    re_ul = re.compile(r'^(\s*[-*+])([^ \n])')   # 无序列表缺空格 -Item
-    re_ul_std = re.compile(r'^(\s*[-*+]) (.*)')  # 标准无序列表
-    re_ol = re.compile(r'^(\s*\d+\.)([^ \n])')   # 有序列表缺空格 1.Item
-    re_ol_std = re.compile(r'^(\s*\d+\.) (.*)')  # 标准有序列表
-    re_hr = re.compile(r'^\s*([-*_]){3,}\s*$')   # 分割线
-    re_bold_fix = re.compile(r'\*\*\s+(.*?)\s+\*\*') # 修复粗体空格 ** text **
+    # 处理行内公式 \( ... \) -> $...$
+    if '\\(' in fixed_text or '\\)' in fixed_text:
+        fixed_text = fixed_text.replace('\\(', '$').replace('\\)', '$')
+        log.append("📐 将 LaTeX 行内公式 \\(...\\) 标准化为 $...$")
 
-    for i, line in enumerate(lines):
-        original_line = line
-        
-        # --- 行内修复 ---
-        
-        # 修复标题缺空格: #Title -> # Title
-        if re_heading.match(line):
-            line = re_heading.sub(r'\1 \2', line)
-            if i < 5: log.append("🔨 修复了标题缺少空格") 
+    # 3. [新增] 修复行内公式多余空格 $x$ -> $x$
+    # Pandoc 对 inline math 要求 $ 后紧跟内容，$ 前紧跟内容
+    # 正则说明：(?<!\$) 排除 $$ 的情况
+    # \$[ \t]+ 匹配起始 $ 后的空格
+    # (.*?) 捕获内容
+    # [ \t]+\$ 匹配结束 $ 前的空格
+    pattern_space_math = r'(?<!\$)\$[ \t]+(.*?)[ \t]+\$(?!\$)'
+    if re.search(pattern_space_math, fixed_text):
+        new_text, count = re.subn(pattern_space_math, r'$\1$', fixed_text)
+        if count > 0:
+            fixed_text = new_text
+            log.append(f"🔧 移除了 {count} 处行内公式的多余空格 ($x$ -> $x$)")
 
-        # 修复引用缺空格: >Text -> > Text
-        if re_quote.match(line):
-            line = re_quote.sub(r'\1 \2', line)
-            
-        # 修复列表缺空格: -Item -> - Item
-        if re_ul.match(line):
-            line = re_ul.sub(r'\1 \2', line)
-        if re_ol.match(line):
-            line = re_ol.sub(r'\1 \2', line)
+    # 4. [HTML 清理] 将 <sup>...</sup> 转换为 Pandoc 上标 ^...^
+    if '<sup>' in fixed_text:
+        new_text, count = re.subn(r'<sup>(.*?)</sup>', r'^\1^', fixed_text)
+        if count > 0:
+            fixed_text = new_text
+            log.append(f"⬆️ 将 {count} 处 HTML 上标标签转换为 Markdown 格式")
 
-        # 修复行内公式空格: $ x $ -> $x$
-        if '$' in line:
-            line = re.sub(r'(?<!\$)\$[ \t]+(.*?)[ \t]+\$(?!\$)', r'$\1$', line)
-
-        # 修复粗体多余空格: ** text ** -> **text**
-        if '**' in line:
-            if re_bold_fix.search(line):
-                line = re_bold_fix.sub(r'**\1**', line)
-
-        # HTML 上标清理
-        if '<sup>' in line:
-            line = re.sub(r'<sup>(.*?)</sup>', r'^\1^', line)
-
-        # --- 上下文空行注入 (防止粘连) ---
-        
-        prev_line = lines[i-1] if i > 0 else ""
-        is_prev_empty = not prev_line.strip()
-        
-        # 1. 引用块隔离
-        # 如果当前是引用，且上一行不是引用、不是空行 -> 加空行
-        if re_quote_std.match(line):
-            if not is_prev_empty and not re_quote_std.match(prev_line):
-                new_lines.append("") 
-        
-        # 2. 列表隔离
-        # 如果当前是列表，且上一行不是列表、不是空行 -> 加空行
-        elif re_ul_std.match(line) or re_ol_std.match(line):
-            is_prev_list = re_ul_std.match(prev_line) or re_ol_std.match(prev_line)
-            if not is_prev_empty and not is_prev_list:
-                new_lines.append("")
-
-        # 3. 标题隔离
-        elif re_heading_std.match(line):
-            if not is_prev_empty:
-                new_lines.append("")
-
-        # 4. 分割线隔离
-        elif re_hr.match(line):
-            if not is_prev_empty:
-                new_lines.append("")
-            
-        new_lines.append(line)
-        
-        # 分割线后也强制加空行
-        if re_hr.match(line):
-            new_lines.append("")
-
-    # 4. 重新组合
-    fixed_text = "\n".join(new_lines)
-    
-    # 5. 收尾：代码块闭合检查
+    # 5. [闭合检查] 自动闭合代码块
     code_fence_count = len(re.findall(r'^```', fixed_text, re.MULTILINE))
     if code_fence_count % 2 != 0:
         fixed_text += "\n```"
-        log.append("🧱 自动闭合了代码块")
+        log.append("🧱 自动闭合了未结束的代码块")
 
-    # 6. 大扫除：清理超过3个的连续换行
-    fixed_text = re.sub(r'\n{4,}', r'\n\n', fixed_text)
+    # 6. [闭合检查] 自动闭合公式块
+    math_block_count = fixed_text.count('$$')
+    if math_block_count % 2 != 0:
+        fixed_text += "\n$$"
+        log.append("🧮 自动闭合了未结束的 LaTeX 公式块")
+        
+    # 7. [格式优化] 确保代码块前后有空行
+    fixed_text = re.sub(r'([^\n])\n```', r'\1\n\n```', fixed_text)
+    fixed_text = re.sub(r'```\n([^\n])', r'```\n\n\1', fixed_text)
+    
+    return fixed_text, log
 
-    return fixed_text, list(set(log))
-
-# --- 4. 核心功能：Word 样式后处理 (增强稳定性版) ---
+# --- 4. 核心功能：Word 样式后处理 ---
 def apply_word_styles(docx_path):
     if not HAS_DOCX:
-        return
+        return 
         
+    doc = Document(docx_path)
+    styles = doc.styles
+
+    # === 1. 优化代码块样式 (Source Code) ===
     try:
-        doc = Document(docx_path)
-        styles = doc.styles
-
-        # === 1. 优化代码块样式 ===
-        target_code_styles = ['Source Code', 'SourceCode', 'Verbatim Char', 'Preformatted Text']
-        
-        for name in target_code_styles:
-            if name in styles:
-                try:
-                    found_code_style = styles[name]
-                    found_code_style.font.name = 'Consolas'
-                    found_code_style.font.size = Pt(10)
-                    
-                    p_pr = found_code_style.element.get_or_add_pPr()
-                    
-                    if not p_pr.find(qn('w:shd')):
-                        shd = OxmlElement('w:shd')
-                        shd.set(qn('w:val'), 'clear')
-                        shd.set(qn('w:color'), 'auto')
-                        shd.set(qn('w:fill'), 'F2F2F2') 
-                        p_pr.append(shd)
-                    
-                    if not p_pr.find(qn('w:pBdr')):
-                        pbdr = OxmlElement('w:pBdr')
-                        for border in ['top', 'left', 'bottom', 'right']:
-                            b = OxmlElement(f'w:{border}')
-                            b.set(qn('w:val'), 'single')
-                            b.set(qn('w:sz'), '4') 
-                            b.set(qn('w:space'), '1')
-                            b.set(qn('w:color'), 'D4D4D4') 
-                            pbdr.append(b)
-                        p_pr.append(pbdr)
-                except Exception:
-                    continue 
-
-        # === 2. 优化引用块样式 ===
-        target_quote_styles = ['Block Text', 'Quote', 'BlockText']
-        
-        for name in target_quote_styles:
-            if name in styles:
-                try:
-                    found_style = styles[name]
-                    found_style.font.color.rgb = RGBColor(105, 105, 105) 
-                    found_style.font.italic = False
-                    found_style.paragraph_format.left_indent = Inches(0.25)
-                    
-                    p_pr = found_style.element.get_or_add_pPr()
-                    
-                    if not p_pr.find(qn('w:pBdr')):
-                        pbdr = OxmlElement('w:pBdr')
-                        left = OxmlElement('w:left')
-                        left.set(qn('w:val'), 'single')
-                        left.set(qn('w:sz'), '12') 
-                        left.set(qn('w:space'), '12') 
-                        left.set(qn('w:color'), '999999') 
-                        pbdr.append(left)
-                        p_pr.append(pbdr)
-                except Exception:
-                    continue
-
-        doc.save(docx_path)
+        style_name = 'Source Code' if 'Source Code' in styles else 'SourceCode'
+        if style_name in styles:
+            style_code = styles[style_name]
+            style_code.font.name = 'Consolas'
+            style_code.font.size = Pt(10)
+            
+            p_pr = style_code.element.get_or_add_pPr()
+            shd = OxmlElement('w:shd')
+            shd.set(qn('w:val'), 'clear')
+            shd.set(qn('w:color'), 'auto')
+            shd.set(qn('w:fill'), 'F2F2F2') 
+            p_pr.append(shd)
+            
+            if not p_pr.find(qn('w:pBdr')):
+                pbdr = OxmlElement('w:pBdr')
+                for border in ['top', 'left', 'bottom', 'right']:
+                    b = OxmlElement(f'w:{border}')
+                    b.set(qn('w:val'), 'single')
+                    b.set(qn('w:sz'), '4') 
+                    b.set(qn('w:space'), '1')
+                    b.set(qn('w:color'), 'D4D4D4') 
+                    pbdr.append(b)
+                p_pr.append(pbdr)
+            
     except Exception as e:
-        print(f"样式应用失败 (非致命错误): {e}")
+        print(f"代码块样式应用失败: {e}")
 
-# --- 5. 转换与生成 (带安全气囊) ---
+    # === 2. 优化引用块样式 (Block Text) ===
+    try:
+        target_styles = ['Block Text', 'Quote', 'BlockText']
+        found_style = None
+        for name in target_styles:
+            if name in styles:
+                found_style = styles[name]
+                break
+        
+        if found_style:
+            found_style.font.color.rgb = RGBColor(105, 105, 105) 
+            found_style.font.italic = False
+            found_style.paragraph_format.left_indent = Inches(0.25)
+            
+            p_pr = found_style.element.get_or_add_pPr()
+            if not p_pr.find(qn('w:pBdr')):
+                pbdr = OxmlElement('w:pBdr')
+                left = OxmlElement('w:left')
+                left.set(qn('w:val'), 'single')
+                left.set(qn('w:sz'), '12') 
+                left.set(qn('w:space'), '12') 
+                left.set(qn('w:color'), '999999') 
+                pbdr.append(left)
+                p_pr.append(pbdr)
+
+    except Exception as e:
+        print(f"引用样式应用失败: {e}")
+
+    doc.save(docx_path)
+
+# --- 5. 转换与生成 ---
 def convert_to_docx(md_content):
     output_path = None
     try:
-        # 创建临时文件
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
             output_path = tmp_file.name
         
-        # 1. 基础转换 (Pandoc)
         pypandoc.convert_text(
             md_content, 
             'docx', 
-            format='markdown+tex_math_dollars+tex_math_single_backslash', 
+            format='markdown+tex_math_dollars', 
             outputfile=output_path, 
             extra_args=['--standalone']
         )
         
-        # 2. 样式增强
         if HAS_DOCX:
-            try:
-                apply_word_styles(output_path)
-            except Exception as e:
-                print(f"样式增强失败，降级为普通 Word: {e}")
+            apply_word_styles(output_path)
             
         return output_path, None
     except Exception as e:
@@ -286,32 +220,36 @@ def generate_smart_filename(text):
 
 # --- 7. 界面布局 ---
 
-st.title("🛠️ Markdown 转 Word 稳定版")
-st.caption("代码块阴影 | 引用块缩进(正体) | 智能修复标题/列表/引用/分割线")
+st.title("🛠️ Markdown 转 Word")
+st.caption("代码块阴影 | 引用块缩进(正体) | 智能标题生成 | 自动修复公式空格")
 st.divider()
 
 if not HAS_DOCX:
     st.error("⚠️ 检测到未安装 `python-docx` 库。样式增强功能将无法生效。")
 
 # 默认示例文本
-default_text = r'''# 格式大乱斗测试
+default_text = r'''# 深度学习中的概率分布
 
-##标题粘连测试(应该自动修复)
-这里没有空格，普通Markdown解析器会挂。
+这是一个包含 "空格公式" 的测试。
 
->引用粘连测试(应该自动修复)
->也没有空格。
+## 1. 坏掉的公式 (Spaces)
 
--无序列表粘连测试
-1.有序列表粘连测试
+大模型经常输出这种带空格的行内公式： $E = mc^2$ ，或者 $ x_0 = 0 $。
+在 Pandoc 里，这通常会被解析成普通文本。
 
----
-上面是粘连的分割线(应该自动变成横线)。
+本工具会自动将其修复为：$E=mc^2$ 和 $x_0=0$。
+
+## 2. 块级公式 (LaTeX 风格)
+
+\[
+\mathcal{L}(\theta) = -\frac{1}{N} \sum_{i=1}^N \left[ y_i \log(\hat{y}_i) + (1-y_i) \log(1-\hat{y}_i) \right]
+\]
+
+## 3. 代码块测试
 
 ```python
-def code():
-    pass
-# 后面少写了闭合
+def fix_spaces(text):
+    return text.strip()
 '''
 
 col_input, col_preview = st.columns(2, gap="medium")
@@ -347,7 +285,7 @@ st.divider()
 col1, col2, col3 = st.columns([1, 2, 1])
 
 with col2:
-    if st.button("🚀 生成 Word 文档", type="primary", use_container_width=True):
+    if st.button("🚀 生成定制化 Word 文档", type="primary", use_container_width=True):
         if not md_text.strip():
             st.warning("⚠️ 内容不能为空")
         else:
@@ -378,3 +316,4 @@ with col2:
                 st.error("❌ 转换失败")
                 if error_msg:
                     st.code(error_msg)
+
