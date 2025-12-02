@@ -43,7 +43,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 核心功能：智能修复引擎 (针对性增强版) ---
+# --- 3. 核心功能：智能修复引擎 (V6.3 针对性增强版) ---
 def smart_fix_markdown(text):
     log = []
     fixed_text = text
@@ -53,19 +53,25 @@ def smart_fix_markdown(text):
         fixed_text = fixed_text.replace('\u200b', '')
         log.append("🧹 移除了隐形字符")
 
-    # 2. [关键] 强制修复标题语法 (#Title -> # Title)
-    # 查找行首的 # (1个或多个)，如果紧接着不是空格或换行，就强制加一个空格
-    pattern_heading = r'^(#+)([^ \t\n])'
-    if re.search(pattern_heading, fixed_text, re.MULTILINE):
-        fixed_text = re.sub(pattern_heading, r'\1 \2', fixed_text, flags=re.MULTILINE)
-        log.append("🔨 修复了粘连的标题语法 (如 '##标题')")
+    # 2. [关键] 强制修复标题语法
+    # 2.1 修复缺少空格 (#Title -> # Title)
+    pattern_heading_missing = r'^(#{1,6})([^ \t\n#])'
+    if re.search(pattern_heading_missing, fixed_text, re.MULTILINE):
+        fixed_text = re.sub(pattern_heading_missing, r'\1 \2', fixed_text, flags=re.MULTILINE)
+        log.append("🔨 修复了标题缺少空格的问题")
+    
+    # 2.2 修复多余空格 (#   Title -> # Title) - 这是一个常见的不规范格式
+    pattern_heading_extra = r'^(#{1,6})[ \t]{2,}'
+    if re.search(pattern_heading_extra, fixed_text, re.MULTILINE):
+        fixed_text = re.sub(pattern_heading_extra, r'\1 ', fixed_text, flags=re.MULTILINE)
+        log.append("🔨 标准化了标题空格")
 
     # 3. [关键] 强制修复引用语法 (>Text -> > Text)
-    # 查找行首的 >，如果紧接着不是空格，强制加空格
+    # 3.1 修复 > 后面缺少空格的情况
     pattern_quote = r'^(>+)([^ \t\n])'
     if re.search(pattern_quote, fixed_text, re.MULTILINE):
         fixed_text = re.sub(pattern_quote, r'\1 \2', fixed_text, flags=re.MULTILINE)
-        log.append("🔨 修复了粘连的引用语法 (如 '>引用')")
+        log.append("🔨 修复了引用缺少空格的问题")
 
     # 4. [新增] 修复列表语法
     pattern_ul = r'^(\s*[-*+])([^ \t\n])'
@@ -79,14 +85,12 @@ def smart_fix_markdown(text):
         log.append("🔢 修复了粘连的有序列表语法")
 
     # 5. [关键] 强制修复分割线 (---)
-    # 查找单独一行的 --- (允许行首有空格)，即使它紧贴着上一行文字
+    # 强制在分割线前后各加两个换行符，防止它被识别为标题下划线
+    # 匹配行首开始的 3个以上 - * 或 _，允许行首有空格
     pattern_hr = r'^\s*([-*_]){3,}\s*$'
     if re.search(pattern_hr, fixed_text, re.MULTILINE):
-        # 强制在前后各加两个换行符，确保它变成独立的横线，而不是标题下划线
         fixed_text = re.sub(pattern_hr, r'\n\n---\n\n', fixed_text, flags=re.MULTILINE)
-        # 清理可能产生的过多空行 (超过3个换行变2个)
-        fixed_text = re.sub(r'\n{4,}', r'\n\n', fixed_text)
-        log.append("➖ 优化了分割线间距 (防止误认为标题)")
+        log.append("➖ 强制分割线前后换行")
 
     # 6. [LaTeX] 强制标准化公式语法
     if '\\[' in fixed_text or '\\]' in fixed_text:
@@ -116,6 +120,9 @@ def smart_fix_markdown(text):
     # 10. [格式] 代码块前后强制空行
     fixed_text = re.sub(r'([^\n])\n```', r'\1\n\n```', fixed_text)
     fixed_text = re.sub(r'```\n([^\n])', r'```\n\n\1', fixed_text)
+    
+    # 11. [大扫除] 清理因重复修复产生的过多空行 (超过3个换行变2个)
+    fixed_text = re.sub(r'\n{4,}', r'\n\n', fixed_text)
     
     return fixed_text, log
 
