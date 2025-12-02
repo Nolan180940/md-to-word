@@ -43,7 +43,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 核心功能：智能修复引擎 (V7.2 引用块专项修复版) ---
+# --- 3. 核心功能：智能修复引擎 (V7.3 引用块微调版) ---
 def smart_fix_markdown(text):
     """
     使用逐行扫描 + 状态检测的方式修复 Markdown。
@@ -153,6 +153,8 @@ def smart_fix_markdown(text):
         # - 且上一行不是引用、也不是空行 -> 强制加空行 (开始新引用块)
         if re_quote_std.match(line):
             is_prev_quote = re_quote_std.match(prev_line_raw)
+            # 只有当上一行不是引用且不是空行时，才插入空行
+            # 这样连续的引用行（即使是 > 行1 \n > 行2）也能保持在一起
             if not is_prev_empty and not is_prev_quote:
                 new_lines.append("") 
         
