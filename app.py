@@ -43,13 +43,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 核心功能：智能修复引擎 (V7.1 列表/引用专项修复版) ---
+# --- 3. 核心功能：智能修复引擎 (V7.2 引用块专项修复版) ---
 def smart_fix_markdown(text):
     """
     使用逐行扫描 + 状态检测的方式修复 Markdown。
     重点修复：
-    1. 列表变横杠问题 (通过强制前置空行修复)
-    2. 引用块失效问题 (通过强制前置空行修复)
+    1. 引用块连续性问题 (修复 > 被打断的问题)
+    2. 列表变横杠问题 (通过强制前置空行修复)
     3. 粗体/标题等格式粘连问题
     """
     if not text: return text, []
@@ -139,25 +139,31 @@ def smart_fix_markdown(text):
         # --- C. 上下文空行注入 (解决粘连导致格式失效的核心逻辑) ---
         
         # 获取上一行内容 (如果存在)
-        prev_line = lines[i-1] if i > 0 else ""
-        is_prev_empty = not prev_line.strip()
+        # 注意：这里我们检查的是原始 lines 的上一行，
+        # 但为了更精准，我们也可以检查 new_lines 的最后一行（已修复后的）
+        # 这里为了简单且符合直觉，我们检查原始上一行是否是同类型
         
-        # 规则1: 引用块隔离
-        # 逻辑：如果当前是引用，且上一行不是引用、不是空行 -> 加空行
-        # 这确保了 Pandoc 能识别出这是一个新的 Blockquote 块
+        prev_line_raw = lines[i-1] if i > 0 else ""
+        is_prev_empty = not prev_line_raw.strip()
+        
+        # 规则1: 引用块隔离 (关键修复！)
+        # 逻辑：
+        # - 如果当前是引用
+        # - 且上一行也是引用 -> 紧密连接 (不加空行)
+        # - 且上一行不是引用、也不是空行 -> 强制加空行 (开始新引用块)
         if re_quote_std.match(line):
-            if not is_prev_empty and not re_quote_std.match(prev_line):
+            is_prev_quote = re_quote_std.match(prev_line_raw)
+            if not is_prev_empty and not is_prev_quote:
                 new_lines.append("") 
         
-        # 规则2: 列表隔离 (关键修复：让横杠变成圆点)
+        # 规则2: 列表隔离 (修复 "-变成了符号" 的问题)
         # 逻辑：如果当前是列表，且上一行不是同类型的列表、不是空行 -> 加空行
-        # Pandoc 要求列表前必须有空行，否则会被当作普通文本处理
         elif re_ul_std.match(line):
-            is_prev_ul = re_ul_std.match(prev_line)
+            is_prev_ul = re_ul_std.match(prev_line_raw)
             if not is_prev_empty and not is_prev_ul:
                 new_lines.append("")
         elif re_ol_std.match(line):
-            is_prev_ol = re_ol_std.match(prev_line)
+            is_prev_ol = re_ol_std.match(prev_line_raw)
             if not is_prev_empty and not is_prev_ol:
                 new_lines.append("")
 
