@@ -43,12 +43,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 核心功能：智能修复引擎 (V7.0 状态机版) ---
+# --- 3. 核心功能：智能修复引擎 (V7.1 列表/引用专项修复版) ---
 def smart_fix_markdown(text):
     """
     使用逐行扫描 + 状态检测的方式修复 Markdown。
-    这种方式比全局正则替换更安全，不会误伤代码块里的内容，
-    并且能精准解决"列表/引用/标题"与正文粘连导致无法识别的问题。
+    重点修复：
+    1. 列表变横杠问题 (通过强制前置空行修复)
+    2. 引用块失效问题 (通过强制前置空行修复)
+    3. 粗体/标题等格式粘连问题
     """
     if not text: return text, []
     
@@ -75,12 +77,18 @@ def smart_fix_markdown(text):
     re_code_fence = re.compile(r'^\s*```')
     re_heading = re.compile(r'^(#{1,6})([^ #])')     # 标题缺空格 #Title
     re_heading_std = re.compile(r'^(#{1,6}) (.*)')    # 标准标题
+    
+    # 引用正则：支持 >Text 和 > Text
     re_quote = re.compile(r'^(>+)([^ \n])')           # 引用缺空格 >Text
-    re_quote_std = re.compile(r'^(>+)( .*)?')         # 标准引用
+    re_quote_std = re.compile(r'^(>+)( .*)?')         # 标准引用 > Text
+    
+    # 列表正则：支持 -Item 和 - Item
     re_ul = re.compile(r'^(\s*[-*+])([^ \n])')        # 无序列表缺空格 -Item
-    re_ul_std = re.compile(r'^(\s*[-*+]) (.*)')       # 标准无序列表
+    re_ul_std = re.compile(r'^(\s*[-*+]) (.*)')       # 标准无序列表 - Item
+    
     re_ol = re.compile(r'^(\s*\d+\.)([^ \n])')        # 有序列表缺空格 1.Item
-    re_ol_std = re.compile(r'^(\s*\d+\.) (.*)')       # 标准有序列表
+    re_ol_std = re.compile(r'^(\s*\d+\.) (.*)')       # 标准有序列表 1. Item
+    
     re_hr = re.compile(r'^\s*([-*_]){3,}\s*$')        # 分割线
     re_bold_fix = re.compile(r'\*\*\s+(.*?)\s+\*\*')  # 修复粗体空格 ** text **
 
@@ -135,17 +143,22 @@ def smart_fix_markdown(text):
         is_prev_empty = not prev_line.strip()
         
         # 规则1: 引用块隔离
-        # 如果当前行是引用，且上一行既不是引用也不是空行 -> 强制插入空行
+        # 逻辑：如果当前是引用，且上一行不是引用、不是空行 -> 加空行
+        # 这确保了 Pandoc 能识别出这是一个新的 Blockquote 块
         if re_quote_std.match(line):
             if not is_prev_empty and not re_quote_std.match(prev_line):
                 new_lines.append("") 
         
-        # 规则2: 列表隔离 (修复 "-变成了符号" 的问题)
-        # 如果当前行是列表，且上一行既不是列表也不是空行 -> 强制插入空行
-        elif re_ul_std.match(line) or re_ol_std.match(line):
-            # 检查上一行是否也是列表
-            is_prev_list = re_ul_std.match(prev_line) or re_ol_std.match(prev_line)
-            if not is_prev_empty and not is_prev_list:
+        # 规则2: 列表隔离 (关键修复：让横杠变成圆点)
+        # 逻辑：如果当前是列表，且上一行不是同类型的列表、不是空行 -> 加空行
+        # Pandoc 要求列表前必须有空行，否则会被当作普通文本处理
+        elif re_ul_std.match(line):
+            is_prev_ul = re_ul_std.match(prev_line)
+            if not is_prev_empty and not is_prev_ul:
+                new_lines.append("")
+        elif re_ol_std.match(line):
+            is_prev_ol = re_ol_std.match(prev_line)
+            if not is_prev_empty and not is_prev_ol:
                 new_lines.append("")
 
         # 规则3: 标题隔离
