@@ -43,7 +43,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 核心功能：智能修复引擎 ---
+# --- 3. 核心功能：智能修复引擎 (针对性增强版) ---
 def smart_fix_markdown(text):
     log = []
     fixed_text = text
@@ -54,16 +54,18 @@ def smart_fix_markdown(text):
         log.append("🧹 移除了隐形字符")
 
     # 2. [关键] 强制修复标题语法 (#Title -> # Title)
+    # 查找行首的 # (1个或多个)，如果紧接着不是空格或换行，就强制加一个空格
     pattern_heading = r'^(#+)([^ \t\n])'
     if re.search(pattern_heading, fixed_text, re.MULTILINE):
         fixed_text = re.sub(pattern_heading, r'\1 \2', fixed_text, flags=re.MULTILINE)
-        log.append("🔨 修复了粘连的标题语法")
+        log.append("🔨 修复了粘连的标题语法 (如 '##标题')")
 
     # 3. [关键] 强制修复引用语法 (>Text -> > Text)
+    # 查找行首的 >，如果紧接着不是空格，强制加空格
     pattern_quote = r'^(>+)([^ \t\n])'
     if re.search(pattern_quote, fixed_text, re.MULTILINE):
         fixed_text = re.sub(pattern_quote, r'\1 \2', fixed_text, flags=re.MULTILINE)
-        log.append("🔨 修复了粘连的引用语法")
+        log.append("🔨 修复了粘连的引用语法 (如 '>引用')")
 
     # 4. [新增] 修复列表语法
     pattern_ul = r'^(\s*[-*+])([^ \t\n])'
@@ -76,12 +78,15 @@ def smart_fix_markdown(text):
         fixed_text = re.sub(pattern_ol, r'\1 \2', fixed_text, flags=re.MULTILINE)
         log.append("🔢 修复了粘连的有序列表语法")
 
-    # 5. [关键] 强制修复分割线
+    # 5. [关键] 强制修复分割线 (---)
+    # 查找单独一行的 --- (允许行首有空格)，即使它紧贴着上一行文字
     pattern_hr = r'^\s*([-*_]){3,}\s*$'
     if re.search(pattern_hr, fixed_text, re.MULTILINE):
+        # 强制在前后各加两个换行符，确保它变成独立的横线，而不是标题下划线
         fixed_text = re.sub(pattern_hr, r'\n\n---\n\n', fixed_text, flags=re.MULTILINE)
+        # 清理可能产生的过多空行 (超过3个换行变2个)
         fixed_text = re.sub(r'\n{4,}', r'\n\n', fixed_text)
-        log.append("➖ 优化了分割线间距")
+        log.append("➖ 优化了分割线间距 (防止误认为标题)")
 
     # 6. [LaTeX] 强制标准化公式语法
     if '\\[' in fixed_text or '\\]' in fixed_text:
@@ -114,7 +119,7 @@ def smart_fix_markdown(text):
     
     return fixed_text, log
 
-# --- 4. 核心功能：Word 样式后处理 (增强稳定性版) ---
+# --- 4. 核心功能：Word 样式后处理 (增强稳定性版 - 未修改) ---
 def apply_word_styles(docx_path):
     if not HAS_DOCX:
         return
@@ -186,7 +191,7 @@ def apply_word_styles(docx_path):
         print(f"样式应用失败 (非致命错误): {e}")
         # 这里不抛出异常，保证 convert_to_docx 能返回文件
 
-# --- 5. 转换与生成 (带安全气囊) ---
+# --- 5. 转换与生成 (带安全气囊 - 未修改) ---
 def convert_to_docx(md_content):
     output_path = None
     try:
