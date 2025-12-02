@@ -43,100 +43,123 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 核心功能：智能修复引擎 (V6.4 强力空行版) ---
+# --- 3. 核心功能：智能修复引擎 (V6.5 逐行扫描增强版) ---
 def smart_fix_markdown(text):
+    if not text: return text, []
+    
     log = []
-    fixed_text = text
-
-    # 1. [基础] 清理零宽空格
-    if '\u200b' in fixed_text:
-        fixed_text = fixed_text.replace('\u200b', '')
+    
+    # 1. 全局预处理：清理零宽空格等隐形字符
+    if '\u200b' in text:
+        text = text.replace('\u200b', '')
         log.append("🧹 移除了隐形字符")
 
-    # 2. [关键] 强制修复标题语法 (#Title / #   Title -> # Title)
-    # 逻辑：查找行首的 #，无论后面有没有空格，或者有多少空格，统一规范化为 "# "
-    # 同时确保标题前面有空行 (除非是文件第一行)
-    
-    # 2.1 修复缺少空格 (#Title -> # Title)
-    pattern_heading_missing = r'^(#{1,6})([^ \t\n#])'
-    if re.search(pattern_heading_missing, fixed_text, re.MULTILINE):
-        fixed_text = re.sub(pattern_heading_missing, r'\1 \2', fixed_text, flags=re.MULTILINE)
-        log.append("🔨 修复了标题缺少空格的问题")
-    
-    # 2.2 修复多余空格 (#   Title -> # Title)
-    pattern_heading_extra = r'^(#{1,6})[ \t]{2,}'
-    if re.search(pattern_heading_extra, fixed_text, re.MULTILINE):
-        fixed_text = re.sub(pattern_heading_extra, r'\1 ', fixed_text, flags=re.MULTILINE)
-        log.append("🔨 标准化了标题空格")
-
-    # 2.3 [新增] 强制标题前加空行 (防止粘连上一段)
-    # 查找：非换行符 + 换行 + #号
-    fixed_text = re.sub(r'([^\n])\n(#{1,6}[ \t])', r'\1\n\n\2', fixed_text)
-
-    # 3. [关键] 强制修复引用语法 (>Text -> > Text)
-    # 3.1 修复缺少空格
-    pattern_quote = r'^(>+)([^ \t\n])'
-    if re.search(pattern_quote, fixed_text, re.MULTILINE):
-        fixed_text = re.sub(pattern_quote, r'\1 \2', fixed_text, flags=re.MULTILINE)
-        log.append("🔨 修复了引用缺少空格的问题")
-
-    # 3.2 [新增] 强制引用块前加空行
-    # 查找：非换行符 + 换行 + >号
-    fixed_text = re.sub(r'([^\n])\n(>+[ \t])', r'\1\n\n\2', fixed_text)
-
-    # 4. [列表] 修复列表语法 (-Item -> - Item)
-    pattern_ul = r'^(\s*[-*+])([^ \t\n])'
-    if re.search(pattern_ul, fixed_text, re.MULTILINE):
-        fixed_text = re.sub(pattern_ul, r'\1 \2', fixed_text, flags=re.MULTILINE)
-        log.append("📋 修复了粘连的无序列表语法")
-    
-    pattern_ol = r'^(\s*\d+\.)([^ \t\n])'
-    if re.search(pattern_ol, fixed_text, re.MULTILINE):
-        fixed_text = re.sub(pattern_ol, r'\1 \2', fixed_text, flags=re.MULTILINE)
-        log.append("🔢 修复了粘连的有序列表语法")
-
-    # 5. [关键] 强制修复分割线 (---)
-    # 强制在分割线前后各加两个换行符
-    pattern_hr = r'^\s*([-*_]){3,}\s*$'
-    if re.search(pattern_hr, fixed_text, re.MULTILINE):
-        fixed_text = re.sub(pattern_hr, r'\n\n---\n\n', fixed_text, flags=re.MULTILINE)
-        log.append("➖ 强制分割线前后换行")
-
-    # 6. [LaTeX] 强制标准化公式语法
-    if '\\[' in fixed_text or '\\]' in fixed_text:
-        fixed_text = fixed_text.replace('\\[', '$$').replace('\\]', '$$')
+    # 2. 全局预处理：修复 LaTeX 公式语法 (\[..\] -> $$..$$)
+    if '\\[' in text or '\\]' in text:
+        text = text.replace('\\[', '$$').replace('\\]', '$$')
         log.append("📐 标准化块级公式")
-    if '\\(' in fixed_text or '\\)' in fixed_text:
-        fixed_text = fixed_text.replace('\\(', '$').replace('\\)', '$')
+    if '\\(' in text or '\\)' in text:
+        text = text.replace('\\(', '$').replace('\\)', '$')
         log.append("📐 标准化行内公式")
 
-    # 7. [LaTeX] 修复行内公式多余空格
-    pattern_space_math = r'(?<!\$)\$[ \t]+(.*?)[ \t]+\$(?!\$)'
-    if re.search(pattern_space_math, fixed_text):
-        fixed_text = re.sub(pattern_space_math, r'$\1$', fixed_text)
-        log.append("🔧 移除了行内公式的多余空格")
+    # 3. 逐行处理 (上下文感知)
+    lines = text.split('\n')
+    new_lines = []
+    
+    # 正则预编译
+    re_heading = re.compile(r'^(#{1,6})([^ #])') # 标题缺空格 #Title
+    re_heading_std = re.compile(r'^(#{1,6}) (.*)') # 标准标题
+    re_quote = re.compile(r'^(>+)([^ \n])')      # 引用缺空格 >Text
+    re_quote_std = re.compile(r'^(>+)( .*)?')    # 标准引用
+    re_ul = re.compile(r'^(\s*[-*+])([^ \n])')   # 无序列表缺空格 -Item
+    re_ul_std = re.compile(r'^(\s*[-*+]) (.*)')  # 标准无序列表
+    re_ol = re.compile(r'^(\s*\d+\.)([^ \n])')   # 有序列表缺空格 1.Item
+    re_ol_std = re.compile(r'^(\s*\d+\.) (.*)')  # 标准有序列表
+    re_hr = re.compile(r'^\s*([-*_]){3,}\s*$')   # 分割线
+    re_bold_fix = re.compile(r'\*\*\s+(.*?)\s+\*\*') # 修复粗体空格 ** text **
 
-    # 8. [HTML] 清理上标
-    if '<sup>' in fixed_text:
-        fixed_text = re.sub(r'<sup>(.*?)</sup>', r'^\1^', fixed_text)
-        log.append("⬆️ 转换 HTML 上标")
+    for i, line in enumerate(lines):
+        original_line = line
+        
+        # --- 行内修复 ---
+        
+        # 修复标题缺空格: #Title -> # Title
+        if re_heading.match(line):
+            line = re_heading.sub(r'\1 \2', line)
+            if i < 5: log.append("🔨 修复了标题缺少空格") 
 
-    # 9. [闭合] 自动闭合代码块/公式
+        # 修复引用缺空格: >Text -> > Text
+        if re_quote.match(line):
+            line = re_quote.sub(r'\1 \2', line)
+            
+        # 修复列表缺空格: -Item -> - Item
+        if re_ul.match(line):
+            line = re_ul.sub(r'\1 \2', line)
+        if re_ol.match(line):
+            line = re_ol.sub(r'\1 \2', line)
+
+        # 修复行内公式空格: $ x $ -> $x$
+        if '$' in line:
+            line = re.sub(r'(?<!\$)\$[ \t]+(.*?)[ \t]+\$(?!\$)', r'$\1$', line)
+
+        # 修复粗体多余空格: ** text ** -> **text**
+        if '**' in line:
+            if re_bold_fix.search(line):
+                line = re_bold_fix.sub(r'**\1**', line)
+
+        # HTML 上标清理
+        if '<sup>' in line:
+            line = re.sub(r'<sup>(.*?)</sup>', r'^\1^', line)
+
+        # --- 上下文空行注入 (防止粘连) ---
+        
+        prev_line = lines[i-1] if i > 0 else ""
+        is_prev_empty = not prev_line.strip()
+        
+        # 1. 引用块隔离
+        # 如果当前是引用，且上一行不是引用、不是空行 -> 加空行
+        if re_quote_std.match(line):
+            if not is_prev_empty and not re_quote_std.match(prev_line):
+                new_lines.append("") 
+        
+        # 2. 列表隔离
+        # 如果当前是列表，且上一行不是列表、不是空行 -> 加空行
+        elif re_ul_std.match(line) or re_ol_std.match(line):
+            is_prev_list = re_ul_std.match(prev_line) or re_ol_std.match(prev_line)
+            if not is_prev_empty and not is_prev_list:
+                new_lines.append("")
+
+        # 3. 标题隔离
+        elif re_heading_std.match(line):
+            if not is_prev_empty:
+                new_lines.append("")
+
+        # 4. 分割线隔离
+        elif re_hr.match(line):
+            if not is_prev_empty:
+                new_lines.append("")
+            
+        new_lines.append(line)
+        
+        # 分割线后也强制加空行
+        if re_hr.match(line):
+            new_lines.append("")
+
+    # 4. 重新组合
+    fixed_text = "\n".join(new_lines)
+    
+    # 5. 收尾：代码块闭合检查
     code_fence_count = len(re.findall(r'^```', fixed_text, re.MULTILINE))
     if code_fence_count % 2 != 0:
         fixed_text += "\n```"
-        log.append("🧱 自动闭合代码块")
-    
-    # 10. [格式] 代码块前后强制空行
-    fixed_text = re.sub(r'([^\n])\n```', r'\1\n\n```', fixed_text)
-    fixed_text = re.sub(r'```\n([^\n])', r'```\n\n\1', fixed_text)
-    
-    # 11. [大扫除] 清理过多空行
-    fixed_text = re.sub(r'\n{4,}', r'\n\n', fixed_text)
-    
-    return fixed_text, log
+        log.append("🧱 自动闭合了代码块")
 
-# --- 4. 核心功能：Word 样式后处理 (保持原样) ---
+    # 6. 大扫除：清理超过3个的连续换行
+    fixed_text = re.sub(r'\n{4,}', r'\n\n', fixed_text)
+
+    return fixed_text, list(set(log))
+
+# --- 4. 核心功能：Word 样式后处理 (增强稳定性版) ---
 def apply_word_styles(docx_path):
     if not HAS_DOCX:
         return
@@ -146,7 +169,7 @@ def apply_word_styles(docx_path):
         styles = doc.styles
 
         # === 1. 优化代码块样式 ===
-        target_code_styles = ['Source Code', 'SourceCode', 'Verbatim Char']
+        target_code_styles = ['Source Code', 'SourceCode', 'Verbatim Char', 'Preformatted Text']
         
         for name in target_code_styles:
             if name in styles:
@@ -206,7 +229,7 @@ def apply_word_styles(docx_path):
     except Exception as e:
         print(f"样式应用失败 (非致命错误): {e}")
 
-# --- 5. 转换与生成 (保持原样) ---
+# --- 5. 转换与生成 (带安全气囊) ---
 def convert_to_docx(md_content):
     output_path = None
     try:
