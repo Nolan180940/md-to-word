@@ -43,13 +43,13 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 3. 核心功能：智能修复引擎 (V7.3 引用块微调版) ---
+# --- 3. 核心功能：智能修复引擎 (V7.4 引用块双向隔离版) ---
 def smart_fix_markdown(text):
     """
     使用逐行扫描 + 状态检测的方式修复 Markdown。
     重点修复：
-    1. 引用块连续性问题 (修复 > 被打断的问题)
-    2. 列表变横杠问题 (通过强制前置空行修复)
+    1. 引用块 (>...) 上下双向隔离，确保不粘连正文
+    2. 列表变横杠问题
     3. 粗体/标题等格式粘连问题
     """
     if not text: return text, []
@@ -61,7 +61,7 @@ def smart_fix_markdown(text):
         text = text.replace('\u200b', '')
         log.append("🧹 移除了隐形字符")
 
-    # 2. 全局清理：标准化 LaTeX 公式 (大模型常用方言)
+    # 2. 全局清理：标准化 LaTeX 公式
     if '\\[' in text or '\\]' in text:
         text = text.replace('\\[', '$$').replace('\\]', '$$')
         log.append("📐 标准化块级公式")
@@ -71,64 +71,59 @@ def smart_fix_markdown(text):
 
     lines = text.split('\n')
     new_lines = []
-    in_code_block = False  # 状态标记：是否在代码块内
+    in_code_block = False 
     
     # 正则预编译
     re_code_fence = re.compile(r'^\s*```')
-    re_heading = re.compile(r'^(#{1,6})([^ #])')     # 标题缺空格 #Title
-    re_heading_std = re.compile(r'^(#{1,6}) (.*)')    # 标准标题
+    re_heading = re.compile(r'^(#{1,6})([^ #])')     
+    re_heading_std = re.compile(r'^(#{1,6}) (.*)')    
     
-    # 引用正则：支持 >Text 和 > Text
-    re_quote = re.compile(r'^(>+)([^ \n])')           # 引用缺空格 >Text
-    re_quote_std = re.compile(r'^(>+)( .*)?')         # 标准引用 > Text
+    re_quote = re.compile(r'^(>+)([^ \n])')           
+    re_quote_std = re.compile(r'^(>+)( .*)?')         
     
-    # 列表正则：支持 -Item 和 - Item
-    re_ul = re.compile(r'^(\s*[-*+])([^ \n])')        # 无序列表缺空格 -Item
-    re_ul_std = re.compile(r'^(\s*[-*+]) (.*)')       # 标准无序列表 - Item
+    re_ul = re.compile(r'^(\s*[-*+])([^ \n])')        
+    re_ul_std = re.compile(r'^(\s*[-*+]) (.*)')       
     
-    re_ol = re.compile(r'^(\s*\d+\.)([^ \n])')        # 有序列表缺空格 1.Item
-    re_ol_std = re.compile(r'^(\s*\d+\.) (.*)')       # 标准有序列表 1. Item
+    re_ol = re.compile(r'^(\s*\d+\.)([^ \n])')        
+    re_ol_std = re.compile(r'^(\s*\d+\.) (.*)')       
     
-    re_hr = re.compile(r'^\s*([-*_]){3,}\s*$')        # 分割线
-    re_bold_fix = re.compile(r'\*\*\s+(.*?)\s+\*\*')  # 修复粗体空格 ** text **
+    re_hr = re.compile(r'^\s*([-*_]){3,}\s*$')        
+    re_bold_fix = re.compile(r'\*\*\s+(.*?)\s+\*\*')  
 
     for i, line in enumerate(lines):
         # --- A. 状态检测 ---
-        # 如果遇到代码块标记，切换状态
         if re_code_fence.match(line):
             in_code_block = not in_code_block
             new_lines.append(line)
             continue
             
-        # 如果在代码块内，直接保留原样，不做任何修改！
         if in_code_block:
             new_lines.append(line)
             continue
 
-        # --- B. 行内格式修复 (仅在非代码块区域进行) ---
+        # --- B. 行内格式修复 ---
         
-        # 1. 修复标题缺空格: #Title -> # Title
+        # 1. 标题缺空格
         if re_heading.match(line):
             line = re_heading.sub(r'\1 \2', line)
             if i < 5: log.append("🔨 修复了标题缺少空格")
 
-        # 2. 修复引用缺空格: >Text -> > Text
+        # 2. 引用缺空格
         if re_quote.match(line):
             line = re_quote.sub(r'\1 \2', line)
             
-        # 3. 修复列表缺空格: -Item -> - Item
+        # 3. 列表缺空格
         if re_ul.match(line):
             line = re_ul.sub(r'\1 \2', line)
         if re_ol.match(line):
             line = re_ol.sub(r'\1 \2', line)
 
-        # 4. 修复粗体多余空格: ** text ** -> **text**
-        # 很多时候粗体失效是因为这里多了空格
+        # 4. 粗体多余空格
         if '**' in line:
             if re_bold_fix.search(line):
                 line = re_bold_fix.sub(r'**\1**', line)
 
-        # 5. 修复行内公式空格: $x$ -> $x$
+        # 5. 行内公式空格
         if '$' in line:
             line = re.sub(r'(?<!\$)\$[ \t]+(.*?)[ \t]+\$(?!\$)', r'$\1$', line)
 
@@ -136,67 +131,65 @@ def smart_fix_markdown(text):
         if '<sup>' in line:
             line = re.sub(r'<sup>(.*?)</sup>', r'^\1^', line)
 
-        # --- C. 上下文空行注入 (解决粘连导致格式失效的核心逻辑) ---
-        
-        # 获取上一行内容 (如果存在)
-        # 注意：这里我们检查的是原始 lines 的上一行，
-        # 但为了更精准，我们也可以检查 new_lines 的最后一行（已修复后的）
-        # 这里为了简单且符合直觉，我们检查原始上一行是否是同类型
+        # --- C. 上下文空行注入 (双向隔离逻辑) ---
         
         prev_line_raw = lines[i-1] if i > 0 else ""
         is_prev_empty = not prev_line_raw.strip()
+        is_curr_empty = not line.strip()
         
-        # 规则1: 引用块隔离 (关键修复！)
-        # 逻辑：
-        # - 如果当前是引用
-        # - 且上一行也是引用 -> 紧密连接 (不加空行)
-        # - 且上一行不是引用、也不是空行 -> 强制加空行 (开始新引用块)
-        if re_quote_std.match(line):
-            is_prev_quote = re_quote_std.match(prev_line_raw)
-            # 只有当上一行不是引用且不是空行时，才插入空行
-            # 这样连续的引用行（即使是 > 行1 \n > 行2）也能保持在一起
-            if not is_prev_empty and not is_prev_quote:
-                new_lines.append("") 
+        is_curr_quote = bool(re_quote_std.match(line))
+        is_prev_quote = bool(re_quote_std.match(prev_line_raw))
         
-        # 规则2: 列表隔离 (修复 "-变成了符号" 的问题)
-        # 逻辑：如果当前是列表，且上一行不是同类型的列表、不是空行 -> 加空行
-        elif re_ul_std.match(line):
-            is_prev_ul = re_ul_std.match(prev_line_raw)
-            if not is_prev_empty and not is_prev_ul:
-                new_lines.append("")
-        elif re_ol_std.match(line):
-            is_prev_ol = re_ol_std.match(prev_line_raw)
-            if not is_prev_empty and not is_prev_ol:
-                new_lines.append("")
+        need_newline = False
 
-        # 规则3: 标题隔离
-        # 标题前面必须有空行
-        elif re_heading_std.match(line):
-            if not is_prev_empty:
-                new_lines.append("")
-
-        # 规则4: 分割线隔离
-        # 分割线前面必须有空行
-        elif re_hr.match(line):
-            if not is_prev_empty:
-                new_lines.append("")
+        # 1. 引用块头部隔离 (Start of Quote)
+        # 当前是引用，上一行既不是引用也不是空行 -> 加空行
+        if is_curr_quote and not is_prev_quote and not is_prev_empty:
+            need_newline = True
             
+        # 2. 引用块尾部隔离 (End of Quote) [本次修复重点]
+        # 上一行是引用，当前行既不是引用也不是空行 -> 加空行 (把引用和正文隔开)
+        if is_prev_quote and not is_curr_quote and not is_curr_empty:
+            need_newline = True
+
+        # 3. 列表头部隔离
+        if re_ul_std.match(line):
+             if not is_prev_empty and not re_ul_std.match(prev_line_raw):
+                 need_newline = True
+        elif re_ol_std.match(line):
+             if not is_prev_empty and not re_ol_std.match(prev_line_raw):
+                 need_newline = True
+        
+        # 4. 标题头部隔离
+        elif re_heading_std.match(line):
+             if not is_prev_empty:
+                 need_newline = True
+        
+        # 5. 分割线头部隔离
+        elif re_hr.match(line):
+             if not is_prev_empty:
+                 need_newline = True
+
+        # 执行插入
+        if need_newline:
+             new_lines.append("")
+        
         new_lines.append(line)
         
-        # 规则5: 分割线后也强制加空行
+        # 分割线尾部隔离
         if re_hr.match(line):
-            new_lines.append("")
+             new_lines.append("")
 
     # 4. 重新组合
     fixed_text = "\n".join(new_lines)
     
-    # 5. 收尾：代码块闭合检查
-    # 如果代码块状态最后还是 True，说明漏了闭合
-    if in_code_block:
+    # 5. 代码块闭合检查
+    code_fence_count = len(re.findall(r'^```', fixed_text, re.MULTILINE))
+    if code_fence_count % 2 != 0:
         fixed_text += "\n```"
         log.append("🧱 自动闭合了未结束的代码块")
 
-    # 6. 大扫除：清理超过3个的连续换行，保持整洁
+    # 6. 大扫除
     fixed_text = re.sub(r'\n{4,}', r'\n\n', fixed_text)
 
     return fixed_text, list(set(log))
