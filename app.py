@@ -228,12 +228,6 @@ def apply_word_styles(docx_path):
 def convert_to_docx(md_content):
     output_path = None
     try:
-        # === 关键修复：在内容最开头加一个空行，防止 Pandoc 误判 YAML ===
-        if md_content and not md_content.startswith('\n'):
-            processed_content = '\n' + md_content
-        else:
-            processed_content = md_content
-        # ============================================================
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
             output_path = tmp_file.name
         
@@ -377,7 +371,3 @@ with col2:
                 st.error("❌ 转换失败")
                 if error_msg:
                     st.code(error_msg)
-
-
-
-
