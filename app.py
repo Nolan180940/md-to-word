@@ -228,15 +228,28 @@ def apply_word_styles(docx_path):
 def convert_to_docx(md_content):
     output_path = None
     try:
+        # === 1. 强制清理开头：确保以非特殊字符开始 ===
+        processed_content = md_content.strip()
+        if not processed_content:
+            raise ValueError("内容为空")
+        
+        # === 2. 在最开头插入一个普通段落（最安全的方式）===
+        # 这样 Pandoc 100% 不会认为这是元数据
+        safe_prefix = "<!-- Pandoc 元数据已禁用 -->\n\n"
+        processed_content = safe_prefix + processed_content
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp_file:
             output_path = tmp_file.name
         
         pypandoc.convert_text(
-            md_content, 
+            processed_content, 
             'docx', 
             format='markdown+tex_math_dollars', 
             outputfile=output_path, 
-            extra_args=['--standalone']
+            extra_args=[
+                '--metadata', 'title=Document',  # 提供最小元数据，避免 standalone
+                '--wrap=none'  # 防止自动换行干扰公式
+            ]
         )
         
         if HAS_DOCX:
@@ -371,3 +384,4 @@ with col2:
                 st.error("❌ 转换失败")
                 if error_msg:
                     st.code(error_msg)
+
