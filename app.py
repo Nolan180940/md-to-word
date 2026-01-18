@@ -236,7 +236,7 @@ def convert_to_docx(md_content):
             'docx', 
             format='markdown+tex_math_dollars', 
             outputfile=output_path, 
-            extra_args=['--standalone']
+            extra_args=['--standalone', '--no-yaml-metadata']
         )
         
         if HAS_DOCX:
@@ -371,3 +371,4 @@ with col2:
                 st.error("❌ 转换失败")
                 if error_msg:
                     st.code(error_msg)
+
