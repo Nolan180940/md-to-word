@@ -234,7 +234,7 @@ def convert_to_docx(md_content):
         pypandoc.convert_text(
             md_content, 
             'docx', 
-            format='markdown+tex_math_dollars', 
+            format='markdown-yaml_metadata_block+tex_math_dollars', # 重点：减号表示禁用
             outputfile=output_path, 
             extra_args=['--standalone']
         )
@@ -371,3 +371,4 @@ with col2:
                 st.error("❌ 转换失败")
                 if error_msg:
                     st.code(error_msg)
+
