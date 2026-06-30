@@ -1,39 +1,22 @@
-```
-# Compiled Python files
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*.egg-info/
 
-# Virtual environments
+# 虚拟环境
 venv/
-.venv/
-.env
-.env.local
-*.env.*
 
-# Logs and temporary files
-*.log
-*.tmp
-*.swp
+# PyInstaller 构建产物
+build/
+dist/
 
-# Editors and IDEs
+# Pandoc 二进制（从 https://github.com/jgm/pandoc/releases 下载）
+pandoc/pandoc.exe
+
+# IDE
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Dependencies and build artifacts
-node_modules/
-dist/
-build/
-.mypy_cache/
-.pytest_cache/
-.coverage
-coverage/
-htmlcov/
-
-# System files
-.DS_Store
+# 系统文件
 Thumbs.db
-```
+Desktop.ini
